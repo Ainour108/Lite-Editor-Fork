@@ -1,0 +1,39 @@
+node_modules/
+renderer/dist/
+assets/icon*.png
+lite-editor
+*.log
+.DS_Store
+
+# IDE
+.idea/
+
+# Personal agent guidance / session handoff — readable on disk, kept out of the repo
+CLAUDE.md
+CLAUDE.local.md
+# проектные скиллы/команды агента — локальные, НЕ в публичный main/contrib
+.claude/
+# резервные копии CLAUDE.md
+CLAUDE.md.bak*
+NEXT.md
+*.bkp
+# артефакты модуля «Контекст» в этом проекте: бекапы исходников при распиле/сборке
+context_project_bkp/
+# внутренние доки-компаньоны CLAUDE.md (ARCHITECTURE/RELEASE/PULT) — не в публичный main
+docs/
+# приватный деплой прод-инфры на VPS (IP/домены/прод-compose/секреты) — не в публичный main
+ansible/
+
+# Build output / release artifacts (большие бинарники не коммитим)
+dist-release/
+release/
+tmp/
+NEW_ARH.md
+HEARTBEAT_DESIGN.md
+TO_SERVER_FILES.md
+
+# Приватное — НИКОГДА не публиковать (раскрытие keystore = подделка подписи APK; фидбэк — личные данные)
+android/app/lite-debug.keystore
+USER_FEEDBACK.md
+# Лендинг — НЕ в публичный репозиторий (деплой через ansible/ читает с диска, git-трекинг не нужен)
+landing/

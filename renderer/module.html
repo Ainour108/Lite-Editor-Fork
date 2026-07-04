@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' file: blob:; img-src 'self' data: file: https: http:; frame-src 'self' file:;" />
+  <title>LiteEditorAI — модуль</title>
+  <link rel="stylesheet" href="dist/module-bundle.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body data-theme="neumorphism" class="module-window">
+  <!-- Окно одного модуля (v1.1+): титлбар + единственная панель, которая заполняет окно. -->
+  <div id="mod-app">
+    <header id="mod-topbar">
+      <div class="win-tools mac-style">
+        <button id="win-close" class="win-btn close" title="Закрыть" aria-label="Закрыть"></button>
+        <button id="win-min" class="win-btn min" title="Свернуть" aria-label="Свернуть"></button>
+        <button id="win-max" class="win-btn max" title="Развернуть" aria-label="Развернуть"></button>
+      </div>
+      <div class="drag-space"></div>
+      <span class="brand"><span class="brand-mark">▍</span><span id="mod-brand-title">Модуль</span></span>
+    </header>
+
+    <!-- Скелеты панелей модулей переезжают сюда из index.html (по одному модулю на окно). -->
+    <div id="module-root">
+      <!-- Системный терминал: свой PTY в домашней папке, вкладки независимых шеллов -->
+      <div id="gutter-scratch" class="gutter gutter-scratch hidden" data-resize="scratch"></div>
+      <section id="scratch-pane" class="hidden">
+        <div class="pane-head">
+          <span>СИСТЕМА · ~</span>
+          <div class="drag-space-static"></div>
+          <button id="scratch-restart" class="icon-btn" title="Перезапустить активную вкладку (новый шелл в ~)" data-icon="refresh"></button>
+        </div>
+        <div id="scratch-tabs" class="term-tabs scratch-tabs"></div>
+        <div id="scratch-term"></div>
+      </section>
+      <!-- OpenRouter chat: чат по своим API-ключам (самостоятельный) -->
+      <div id="gutter-chat" class="gutter hidden" data-resize="chat"></div>
+      <section id="chat-pane" class="hidden">
+        <div class="pane-head">
+          <span id="chat-title" class="chat-title">OpenRouter</span>
+          <div class="drag-space-static"></div>
+          <button id="chat-keys" class="icon-btn" title="Управление ключами" data-icon="sliders"></button>
+        </div>
+        <div id="chat-tabs" class="chat-tabs"></div><!-- вкладка на каждый ключ (рендерит openrouter.js) -->
+        <div id="chat-top">
+          <div id="chat-session-wrap" class="chat-session-wrap">
+            <button id="chat-session-btn" class="chat-session-btn" type="button" title="Сессии этого ключа">☰ Сессия 1</button>
+            <div id="chat-session-pop" class="chat-session-pop hidden"></div>
+          </div>
+          <div id="chat-model-wrap" class="chat-model-wrap">
+            <button id="chat-model-btn" class="chat-model-btn" type="button">Выбрать модель…</button>
+            <div id="chat-model-pop" class="chat-model-pop hidden">
+              <input id="chat-model-search" type="text" placeholder="Поиск модели…" autocomplete="off" spellcheck="false">
+              <div id="chat-model-list" class="chat-model-list"></div>
+            </div>
+          </div>
+          <div class="chat-ctx" title="Сколько последних сообщений отправлять модели (1–100)">
+            <label for="chat-ctx-input">контекст</label>
+            <input id="chat-ctx-input" type="number" min="1" max="100" value="10">
+          </div>
+          <span id="chat-usage" class="or-usage-text chat-usage" title="Баланс активного ключа"></span>
+          <button id="chat-usage-refresh" class="or-refresh" title="Обновить баланс ключа" data-icon="refresh" data-icon-size="13"></button>
+        </div>
+        <div id="chat-log" class="chat-log"></div>
+        <div id="chat-input-row" class="chat-input-row">
+          <textarea id="chat-input" rows="1" placeholder="Сообщение…  (Enter — отправить, Shift+Enter — перенос строки)" spellcheck="false"></textarea>
+          <button id="chat-send" class="btn primary chat-send" type="button" title="Отправить">▶</button>
+        </div>
+      </section>
+
+      <!-- Обработка текста: полноэкранный AI-редактор документа (renderer/modules/textproc.js) -->
+      <div id="gutter-doc" class="gutter hidden" data-resize="doc"></div>
+      <section id="doc-pane" class="hidden tp-root">
+        <div class="tp-bg" aria-hidden="true">
+          <span class="tp-blob tp-blob-a"></span>
+          <span class="tp-blob tp-blob-b"></span>
+          <span class="tp-blob tp-blob-c"></span>
+          <span class="tp-blob tp-blob-d"></span>
+        </div>
+
+        <div class="tp-layout">
+          <div id="doc-sidebar" class="tp-sidebar hidden">
+            <div class="tp-sidebar-head">
+              <div class="tp-sidebar-actions">
+                <button class="tp-icon-btn sm" id="btn-tree-new-file" title="Новый файл" data-icon="obs-new-file"></button>
+                <button class="tp-icon-btn sm" id="btn-tree-new-folder" title="Новая папка" data-icon="obs-new-folder"></button>
+                <button class="tp-icon-btn sm" id="btn-tree-sort" title="Сортировка" data-icon="obs-sort"></button>
+                <button class="tp-icon-btn sm" id="btn-tree-collapse" title="Свернуть все" data-icon="obs-collapse"></button>
+              </div>
+            </div>
+            <div id="doc-tree" class="tp-tree"></div>
+          </div>
+          
+          <div class="tp-shell">
+            <div id="doc-tabs-container" class="tp-tabs-container"></div>
+            
+            <!-- toolbar: undo/redo, открыть/сохранить, имя+статус, режим, панели -->
+            <div class="tp-toolbar">
+              <button id="doc-toggle-sidebar" class="tp-icon-btn" title="Развернуть" data-icon="columns" style="margin-right: 8px;"></button>
+              <div class="tp-tb-group">
+              <button id="doc-undo-btn" class="tp-icon-btn" title="Отменить" data-icon="undo"></button>
+              <button id="doc-redo-btn" class="tp-icon-btn" title="Повторить" data-icon="redo"></button>
+            </div>
+            <span class="tp-sep"></span>
+            <button id="doc-open-btn" class="tp-btn"><span data-icon="folder"></span>Открыть</button>
+            <button id="doc-save-btn" class="tp-btn"><span data-icon="save"></span>Сохранить</button>
+            <div class="tp-doc-name-wrap">
+              <span id="doc-name-label" class="tp-doc-name">Безымянный</span>
+              <span id="doc-status-label" class="tp-doc-status">Новый файл</span>
+            </div>
+            <div id="doc-mode-toggle" class="tp-segment">
+              <span class="tp-seg-thumb"></span>
+              <button data-mode="wysiwyg" class="tp-seg-btn active">Разметка</button>
+              <button data-mode="markdown" class="tp-seg-btn">Markdown</button>
+            </div>
+            <button id="doc-toggle-inspector" class="tp-btn tp-btn-accent"><span data-icon="panels"></span>Панели</button>
+          </div>
+
+          <!-- floating format pill -->
+          <div id="doc-format-pill" class="tp-pill">
+            <!-- Custom Glassmorphic Dropdowns -->
+            <div class="tp-dropdown" id="doc-zoom-dd">
+              <button class="tp-dd-btn" title="Масштаб"><span>100%</span> <span data-icon="chevron-down"></span></button>
+              <div class="tp-dd-menu" hidden>
+                <button class="tp-dd-item" data-val="0.75">75%</button>
+                <button class="tp-dd-item active" data-val="1">100%</button>
+                <button class="tp-dd-item" data-val="1.25">125%</button>
+                <button class="tp-dd-item" data-val="1.5">150%</button>
+              </div>
+            </div>
+            <span class="tp-pill-sep"></span>
+            <div class="tp-dropdown" id="doc-lineheight-dd">
+              <button class="tp-dd-btn" title="Интервал"><span data-icon="list"></span> <span data-icon="chevron-down"></span></button>
+              <div class="tp-dd-menu" hidden>
+                <button class="tp-dd-item" data-val="0.8">0.8</button>
+                <button class="tp-dd-item" data-val="1.0">1.0</button>
+                <button class="tp-dd-item" data-val="1.2">1.2</button>
+                <button class="tp-dd-item active" data-val="1.6">1.6</button>
+                <button class="tp-dd-item" data-val="2.0">2.0</button>
+              </div>
+            </div>
+            <span class="tp-pill-sep"></span>
+            <div class="tp-dropdown" id="doc-format-dd" data-cmd="formatBlock">
+              <button class="tp-dd-btn"><span>Обычный</span> <span data-icon="chevron-down"></span></button>
+              <div class="tp-dd-menu" hidden>
+                <button class="tp-dd-item active" data-val="<p>">Обычный</button>
+                <button class="tp-dd-item" data-val="<h1>">Заголовок</button>
+                <button class="tp-dd-item" data-val="<h2>">Подзаголовок</button>
+              </div>
+            </div>
+            <span class="tp-pill-sep"></span>
+            <button data-cmd="bold" class="tp-pill-btn" title="Жирный" data-icon="bold"></button>
+            <button data-cmd="italic" class="tp-pill-btn" title="Курсив" data-icon="italic"></button>
+            <button data-cmd="underline" class="tp-pill-btn" title="Подчёркнутый" data-icon="underline"></button>
+            <span class="tp-pill-sep"></span>
+            <button data-cmd="justifyLeft" class="tp-pill-btn" title="По левому краю" data-icon="align-left"></button>
+            <button data-cmd="justifyCenter" class="tp-pill-btn" title="По центру" data-icon="align-center"></button>
+            <button data-cmd="justifyRight" class="tp-pill-btn" title="По правому краю" data-icon="align-right"></button>
+            <button data-cmd="justifyFull" class="tp-pill-btn" title="По ширине" data-icon="align-justify"></button>
+            <span class="tp-pill-sep"></span>
+            <button data-cmd="insertUnorderedList" class="tp-pill-btn" title="Маркированный список" data-icon="list"></button>
+            <button data-cmd="toggleNumbers" class="tp-pill-btn" title="Нумерация строк/абзацев" data-icon="list-ol"></button>
+            <span class="tp-pill-sep"></span>
+            <button data-cmd="toggleColumns" class="tp-pill-btn" title="Две колонки" data-icon="columns-2"></button>
+            <button data-cmd="insertTable" class="tp-pill-btn" title="Вставить таблицу" data-icon="table-insert"></button>
+          </div>
+
+          <!-- workspace -->
+          <div class="tp-workspace">
+            <div class="tp-canvas">
+              <div class="tp-page">
+                <div id="doc-editor-wysiwyg" class="tp-doc" contenteditable="true" spellcheck="false"></div>
+                <div id="doc-editor-md" class="tp-doc tp-doc-md" contenteditable="true" spellcheck="false" hidden></div>
+              </div>
+            </div>
+
+            <!-- inspector: two tabs -->
+            <div id="doc-inspector" class="tp-inspector">
+              <div id="doc-inspector-tabs" class="tp-tabs">
+                <span class="tp-seg-thumb"></span>
+                <button data-tab="ai" class="tp-tab active"><span data-icon="sparkles"></span>AI-обработка</button>
+                <button data-tab="edit" class="tp-tab"><span data-icon="pencil"></span>Редактирование</button>
+              </div>
+
+              <!-- EDIT TAB: draggable cards -->
+              <div id="doc-panel-edit" class="tp-panel-edit" hidden>
+                <!-- FORMAT CARD -->
+                <div class="tp-card" data-drop="format">
+                  <div class="tp-card-head" draggable="true" data-drag-id="format">
+                    <span class="tp-card-grip" data-icon="drag-handle"></span>
+                    <span class="tp-card-ic" data-icon="palette"></span>
+                    <span class="tp-card-title">Формат</span>
+                  </div>
+                  <div id="doc-inspector-format-btns" class="tp-card-body">
+                    <div class="tp-field">
+                      <div class="tp-label">Шрифт</div>
+                      <div class="tp-dropdown tp-select-block" data-cmd="fontName">
+                        <button class="tp-dd-btn" style="width:100%;justify-content:space-between"><span>SF Pro Text</span><span class="tp-dd-arr" data-icon="chevron-down"></span></button>
+                        <div class="tp-dd-menu" hidden>
+                          <button class="tp-dd-item active" data-val="-apple-system">SF Pro Text</button>
+                          <button class="tp-dd-item" data-val="Georgia">Georgia</button>
+                          <button class="tp-dd-item" data-val="Times New Roman">Times New Roman</button>
+                          <button class="tp-dd-item" data-val="JetBrains Mono">JetBrains Mono</button>
+                        </div>
+                      </div>
+                      <div class="tp-row">
+                        <div class="tp-dropdown" data-cmd="fontSize" style="flex:1">
+                          <button class="tp-dd-btn" style="width:100%;justify-content:space-between"><span>12 pt</span><span class="tp-dd-arr" data-icon="chevron-down"></span></button>
+                          <div class="tp-dd-menu" hidden>
+                            <button class="tp-dd-item" data-val="2">10 pt</button>
+                            <button class="tp-dd-item active" data-val="3">12 pt</button>
+                            <button class="tp-dd-item" data-val="4">14 pt</button>
+                            <button class="tp-dd-item" data-val="5">18 pt</button>
+                            <button class="tp-dd-item" data-val="6">24 pt</button>
+                          </div>
+                        </div>
+                        <div class="tp-btn-group">
+                          <button data-cmd="bold" class="tp-pill-btn" data-icon="bold"></button>
+                          <button data-cmd="italic" class="tp-pill-btn" data-icon="italic"></button>
+                          <button data-cmd="underline" class="tp-pill-btn" data-icon="underline"></button>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="tp-field">
+                      <div class="tp-label">Цвет текста</div>
+                      <div id="doc-color-swatches" class="tp-swatches">
+                        <button data-color="#1c1c1e" class="tp-swatch" style="background:#1c1c1e"></button>
+                        <button data-color="#0a84ff" class="tp-swatch" style="background:#0a84ff"></button>
+                        <button data-color="#ff9500" class="tp-swatch" style="background:#ff9500"></button>
+                        <button data-color="#34c759" class="tp-swatch" style="background:#34c759"></button>
+                        <button data-color="#ff375f" class="tp-swatch" style="background:#ff375f"></button>
+                        <label class="tp-swatch tp-swatch-custom">+<input id="doc-color-picker" type="color" value="#0a84ff"></label>
+                      </div>
+                    </div>
+                    <div class="tp-field">
+                      <div class="tp-label">Выравнивание и списки</div>
+                      <div class="tp-btn-group tp-btn-group-wide">
+                        <button data-cmd="justifyLeft" class="tp-pill-btn" data-icon="align-left"></button>
+                        <button data-cmd="justifyCenter" class="tp-pill-btn" data-icon="align-center"></button>
+                        <button data-cmd="justifyRight" class="tp-pill-btn" data-icon="align-right"></button>
+                        <span class="tp-btn-group-sep"></span>
+                        <button data-cmd="insertUnorderedList" class="tp-pill-btn" data-icon="list"></button>
+                        <button data-cmd="insertOrderedList" class="tp-pill-btn" data-icon="list-ordered"></button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- FORMULA CARD -->
+                <div class="tp-card" data-drop="formula">
+                  <div class="tp-card-head" draggable="true" data-drag-id="formula">
+                    <span class="tp-card-grip" data-icon="drag-handle"></span>
+                    <span class="tp-card-ic" data-icon="formula"></span>
+                    <span class="tp-card-title">Формула</span>
+                    <span class="tp-card-tag">LaTeX</span>
+                  </div>
+                  <div class="tp-card-body">
+                    <div id="doc-formula-symbols" class="tp-formula-symbols"><!-- filled by JS --></div>
+                    <label class="tp-checkbox">
+                      <input type="checkbox" id="doc-formula-blockmode">
+                      Блочная формула (с нумерацией)
+                    </label>
+                    <textarea id="doc-formula-input" class="tp-mono-input" rows="2">\frac{-b \pm \sqrt{b^2-4ac}}{2a}</textarea>
+                    <div class="tp-label">Предпросмотр</div>
+                    <div id="doc-formula-preview" class="tp-formula-preview"></div>
+                    <button id="doc-formula-insert" class="tp-btn tp-btn-accent tp-btn-block"><span data-icon="plus"></span>Вставить в документ</button>
+                  </div>
+                </div>
+
+                <div class="tp-card-hint">Перетащите карточку за ⠿, чтобы поменять порядок</div>
+              </div>
+
+              <!-- AI TAB -->
+              <div id="doc-panel-ai" class="tp-panel-ai">
+                <div class="tp-ai-row">
+                  <span class="tp-label">Модель</span>
+                  <div id="doc-ai-models" class="tp-segment sm">
+                    <span class="tp-seg-thumb"></span>
+                    <!-- filled by JS -->
+                  </div>
+                </div>
+                <div class="tp-ai-block">
+                  <div class="tp-label">Роль агента</div>
+                  <div id="doc-ai-roles" class="tp-chips"><!-- filled by JS --></div>
+                </div>
+                <div class="tp-ai-context">
+                  <div class="tp-ai-context-title">Контекст</div>
+                  <div id="doc-ai-ctx-text">Выделите фрагмент в документе — он попадёт сюда. Ответ можно вставить кнопкой «Заменить».</div>
+                </div>
+                <div id="doc-ai-chat-log" class="tp-chat-log"><!-- chat history --></div>
+                <div class="tp-chat-input-row">
+                  <div class="tp-chat-input-box">
+                    <textarea id="doc-ai-chat-input" rows="1" placeholder="Что сделать с текстом?"></textarea>
+                    <button id="doc-ai-chat-send" class="tp-chat-send" data-icon="send"></button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        </div>
+      </section>
+
+      <!-- «Контекст» module: per-project граф контекста агента (канва как n8n) -->
+      <div id="gutter-ctx" class="gutter hidden" data-resize="ctx"></div>
+      <section id="ctx-pane" class="hidden">
+        <div class="pane-head">
+          <span id="ctx-title">Контекст</span>
+          <span id="ctx-stale" class="ctx-stale" title="Есть неподтверждённые изменения — нажми «Подтвердить»" hidden>●</span>
+          <button id="ctx-extern" class="ctx-extern" title="Файл изменён вне модуля (вероятно, агентом) — посмотреть и втянуть правки" hidden>⚠ файл изменён вне модуля</button>
+          <div class="drag-space-static"></div>
+          <button id="ctx-help" class="icon-btn" title="Как это работает?" data-icon="help"></button>
+          <button id="ctx-settings" class="icon-btn" title="Настройки (бекапы, автосборка)" data-icon="sliders"></button>
+        </div>
+        <div id="ctx-agents" class="ctx-agents"></div><!-- переключатель агента (Claude/Codex): рендерится в contextgraph.js -->
+        <div id="ctx-profiles" class="ctx-profiles"></div><!-- вкладки-профили текущего агента -->
+        <div id="ctx-stats" class="ctx-stats"></div>
+        <div id="ctx-canvas" class="ctx-canvas">
+          <!-- плавающая панель действий профиля/канвы (поверх канвы, правый верхний угол) -->
+          <div id="ctx-toolbar" class="ctx-toolbar">
+            <div class="ctx-tb-row">
+              <button id="ctx-add" class="icon-btn" title="Добавить блок" data-icon="plus"></button>
+              <button id="ctx-group" class="icon-btn" title="Сгруппировать выделенные блоки (Ctrl+G)" data-icon="layers" hidden></button>
+              <button id="ctx-fit" class="icon-btn" title="Уместить всё в экран" data-icon="maximize"></button>
+              <button id="ctx-points" class="icon-btn ctx-tb-emoji" title="Версии (точки восстановления)">🕘</button>
+            </div>
+            <div id="ctx-tb-actions" class="ctx-tb-row ctx-tb-actions" hidden>
+              <button id="ctx-reset" class="icon-btn" title="Сбросить неподтверждённые изменения — вернуть канву к последнему подтверждённому виду" data-icon="refresh" hidden></button>
+              <button id="ctx-apply" class="icon-btn ctx-apply-btn" title="Подтвердить изменения: сохранить канву и собрать файл агента (с бекапом)" data-icon="check" hidden></button>
+            </div>
+          </div>
+          <button id="ctx-wire-del" class="ctx-wire-del" title="Удалить соединение" hidden>×</button><!-- появляется при наведении на провод -->
+          <div id="ctx-marquee" class="ctx-marquee" hidden></div><!-- рамка выделения (Shift+протягивание) -->
+          <div id="ctx-world" class="ctx-world">
+            <svg id="ctx-wires" class="ctx-wires"></svg>
+            <div id="ctx-nodes"></div>
+          </div>
+          <!-- лёгкий онбординг: нижняя плашка, закрывается один раз; основное управление — в тулбаре справа сверху -->
+          <div id="ctx-onboard" class="ctx-onboard" hidden>
+            <div class="ctx-onboard-tx"><b>Контекст агента из блоков.</b> Стартовый блок — это весь файл агента. Наведи на него курсор и нажми <b>✂</b> (или кнопку ниже), чтобы разложить его на блоки по заголовкам. Дальше: «+» добавить блок, 🕘 версии, выделить блоки и сгруппировать.</div>
+            <button id="ctx-ob-split" class="btn primary">✂ Распилить файл</button>
+            <button id="ctx-ob-help" class="btn">Как это работает</button>
+            <button id="ctx-ob-close" class="icon-btn" title="Скрыть подсказку" data-icon="x"></button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Git больше НЕ отдельное окно: вселён в окно вивера (#commit-pane слева / #log-pane снизу / #vcs-topbar). -->
+
+      <!-- Containers module (docker/podman): system-wide -->
+      <div id="gutter-docker" class="gutter hidden" data-resize="docker"></div>
+      <section id="docker-pane" class="hidden">
+        <div class="pane-head">
+          <span id="docker-title">Контейнеры</span>
+          <div class="drag-space-static"></div>
+          <button id="docker-refresh" class="icon-btn" title="Обновить" data-icon="refresh"></button>
+        </div>
+        <div id="docker-tabs" class="docker-tabs"></div>
+        <div id="docker-body" class="docker-body"></div>
+      </section>
+
+      <!-- RemoteHost module (SSH-сессии к серверам/хостингам): system-wide -->
+      <div id="gutter-rh" class="gutter hidden" data-resize="rh"></div>
+      <section id="rh-pane" class="hidden">
+        <div class="pane-head">
+          <span id="rh-title">Удалённые хосты</span>
+          <div class="drag-space-static"></div>
+          <button id="rh-back" class="icon-btn" title="К списку подключений" data-icon="chevron-left" style="display:none"></button>
+          <button id="rh-refresh" class="icon-btn" title="Обновить список" data-icon="refresh"></button>
+        </div>
+        <div id="rh-tabs" class="term-tabs rh-tabs" style="display:none"></div>
+        <div id="rh-conns" class="db-body"></div>
+        <div id="rh-term" style="display:none"></div>
+      </section>
+
+      <!-- Databases module (Postgres/MySQL/SQLite): system-wide -->
+      <div id="gutter-db" class="gutter hidden" data-resize="db"></div>
+      <section id="db-pane" class="hidden">
+        <div class="pane-head">
+          <span id="db-title">Базы данных</span>
+          <div class="drag-space-static"></div>
+          <button id="db-refresh" class="icon-btn" title="Обновить" data-icon="refresh"></button>
+        </div>
+        <div id="db-body" class="db-body"></div>
+      </section>
+
+      <!-- Notes/tasks module: задачи активного проекта + общие (следует за активным проектом редактора) -->
+      <div id="gutter-notes" class="gutter hidden" data-resize="notes"></div>
+      <section id="notes-pane" class="hidden">
+        <div class="pane-head">
+          <span id="notes-proj">Задачи</span>
+          <div class="drag-space-static"></div>
+          <button id="notes-export" class="icon-btn" title="Экспорт заметок в JSON" data-icon="download"></button>
+          <button id="notes-import" class="icon-btn" title="Импорт заметок из JSON" data-icon="upload"></button>
+        </div>
+        <div id="notes-body" class="notes-body"></div>
+      </section>
+
+      <!-- Audit module: базовый аудит активного проекта (следует за активным проектом редактора) -->
+      <div id="gutter-audit" class="gutter hidden" data-resize="audit"></div>
+      <section id="audit-pane" class="hidden">
+        <div class="pane-head">
+          <span id="audit-proj">Аудит проекта</span>
+          <div class="drag-space-static"></div>
+          <button id="audit-rescan" class="icon-btn" title="Пересканировать проект" data-icon="refresh"></button>
+        </div>
+        <div id="audit-body" class="audit-body"></div>
+      </section>
+
+      <!-- Company module: ИИ-компания над активным проектом (директор + сабагенты) -->
+      <div id="gutter-company" class="gutter hidden" data-resize="company"></div>
+      <section id="company-pane" class="hidden">
+        <div class="pane-head">
+          <span id="company-proj">ИИ компания</span>
+          <div class="drag-space-static"></div>
+          <button id="company-settings" class="icon-btn" title="Штат и настройки компании" data-icon="sliders"></button>
+        </div>
+        <div id="company-body" class="company-body"></div>
+      </section>
+
+      <!-- Tools module: devtools-комбайн (base64/JSON↔YAML/хэши/JWT/regex/diff…) -->
+      <div id="gutter-tools" class="gutter hidden" data-resize="tools"></div>
+      <section id="tools-pane" class="hidden">
+        <div class="pane-head">
+          <span>Инструменты</span>
+          <div class="drag-space-static"></div>
+        </div>
+        <div id="tools-body" class="tools-body"></div>
+      </section>
+
+      <!-- Pomodoro module: пульт техники помодоро (движок таймера живёт в main) -->
+      <div id="gutter-pomodoro" class="gutter hidden" data-resize="pomodoro"></div>
+      <section id="pomodoro-pane" class="hidden">
+        <div class="pane-head">
+          <span>Помодоро</span>
+          <div class="drag-space-static"></div>
+          <button id="pomodoro-min" class="icon-btn" title="Минимализм — компактный вид" data-icon="compress"></button>
+        </div>
+        <div id="pomodoro-body" class="pomodoro-body"></div>
+      </section>
+
+      <!-- IterFlow module: таск-трекер исполнителя (отдельный продукт через /api/editor/*) -->
+      <div id="gutter-iterflow" class="gutter hidden" data-resize="iterflow"></div>
+      <section id="iterflow-pane" class="hidden">
+        <div class="pane-head">
+          <span id="iterflow-proj">IterFlow</span>
+          <div class="drag-space-static"></div>
+          <button id="iterflow-site" class="icon-btn" title="Открыть сайт IterFlow" data-icon="globe"></button>
+          <button id="iterflow-refresh" class="icon-btn" title="Обновить" data-icon="refresh"></button>
+          <button id="iterflow-logout" class="icon-btn" title="Выйти из IterFlow" data-icon="logout"></button>
+        </div>
+        <div id="iterflow-body" class="iterflow-body"></div>
+      </section>
+
+      <!-- WEB/SEO audit module: аудит сайта (локальный dev-сервер или внешний домен) -->
+      <div id="gutter-seo" class="gutter hidden" data-resize="seo"></div>
+      <section id="seo-pane" class="hidden">
+        <div class="pane-head">
+          <span id="seo-proj">WEB/SEO аудит</span>
+          <div class="drag-space-static"></div>
+          <button id="seo-rescan" class="icon-btn" title="Пересканировать сайт" data-icon="refresh"></button>
+        </div>
+        <div id="seo-body" class="seo-body"></div>
+      </section>
+
+      <!-- Files («Проект») window: вивер кода (CodeMirror) + дерево + ВСТРОЕННЫЙ Git (вместо отдельного окна).
+           Раскладка (CSS body.mw-files, grid): сверху VCS-полоса · слева стрип-иконки + переключаемая
+           секция (Файлы/Коммит/Ветки-Лог) · по центру вивер/дифф. PhpStorm-style. -->
+      <!-- VCS-полоса: ветка + ahead/behind + fetch/pull/push (наполняет git-компонент). Скрыта, если не репо. -->
+      <div id="vcs-topbar" class="vcs-topbar hidden"></div>
+      <!-- Стрип-иконки слева: переключают левую секцию. -->
+      <div id="vcs-strip" class="vcs-strip">
+        <button id="strip-files" class="strip-btn active" title="Файлы (дерево)" data-section="files" data-icon="folder"></button>
+        <button id="strip-commit" class="strip-btn" title="Коммит (изменения)" data-section="commit" data-icon="check"></button>
+        <button id="strip-branches" class="strip-btn" title="Ветки и история" data-section="branches" data-icon="git"></button>
+      </div>
+      <!-- Разделитель между левой секцией и вивером: перетаскивание меняет ширину (--mw-left). -->
+      <div id="mw-gutter" class="mw-gutter" title="Потяните, чтобы изменить ширину"></div>
+      <!-- Колонка табов открытых файлов (между деревом и вивером). Список наполняет renderTabs() в #tabs-list;
+           пусто → ширина 0. Внизу — контекст-бар просмотра (PhpStorm-style): кнопки для активного файла
+           (Превью/Рядом для md·html, Во весь экран·В браузере — только html). Показ — updatePreviewBar(). -->
+      <section id="tabs-pane" class="file-tabs empty">
+        <div id="tabs-list" class="tabs-list"></div>
+        <div id="tabs-foot" class="tabs-foot" style="display:none">
+          <button id="viewer-preview" class="tfoot-btn" title="Превью (Markdown / HTML)"></button>
+          <button id="viewer-split" class="tfoot-btn" title="Превью рядом с кодом (split)"></button>
+          <button id="viewer-full" class="tfoot-btn" title="Развернуть превью HTML на весь экран (Esc — выход)"></button>
+          <button id="viewer-browser" class="tfoot-btn" title="Открыть HTML в браузере"></button>
+        </div>
+      </section>
+      <section id="viewer-pane" class="hidden">
+        <div class="pane-head">
+          <button id="viewer-back" class="icon-btn" title="Назад (Alt+←)" data-icon="chevron-left" disabled></button>
+          <button id="viewer-fwd" class="icon-btn" title="Вперёд (Alt+→)" data-icon="chevron-right" disabled></button>
+          <span id="viewer-filename">—</span>
+          <span id="viewer-dirty" class="dirty-dot" title="Несохранённые изменения"></span>
+          <div class="drag-space-static"></div>
+          <button id="viewer-find" class="icon-btn" title="Найти в проекте (Ctrl+Shift+F)" data-icon="search"></button>
+          <button id="viewer-outline" class="icon-btn" title="Структура файла (Ctrl+Shift+O)" data-icon="braces"></button>
+          <button id="viewer-todos" class="icon-btn" title="TODO / FIXME по проекту" data-icon="flag"></button>
+          <button id="viewer-bookmark" class="icon-btn" title="Закладка на текущей строке (Ctrl+F2). Клик правой — список закладок" data-icon="star"></button>
+          <button id="viewer-minimap" class="icon-btn" title="Миникарта кода (вкл/выкл)" data-icon="columns"></button>
+          <button id="viewer-agent" class="icon-btn" title="Режим агента — ревью правок агента, слой авторства, «спросить агента» (вкл/выкл)" data-icon="terminal"></button>
+          <button id="viewer-blame" class="icon-btn" title="Git blame — автор строки (вкл/выкл)" data-icon="note"></button>
+          <button id="viewer-diff" class="icon-btn" title="Дифф изменений vs HEAD (git)" data-icon="diff"></button>
+          <button id="viewer-zen" class="icon-btn" title="Zen-режим — только код (Esc выход)" data-icon="maximize"></button>
+          <button id="viewer-save" class="icon-btn" title="Сохранить (Ctrl+S)" data-icon="save"></button>
+        </div>
+        <div id="viewer-crumbs" class="viewer-crumbs hidden"></div>
+        <div id="viewer-reload-bar" class="reload-bar hidden">
+          <span class="reload-bar-text">Файл изменён на диске, а у вас есть несохранённые правки.</span>
+          <button id="viewer-reload-apply" class="reload-bar-btn">Перечитать с диска</button>
+          <button id="viewer-reload-dismiss" class="icon-btn" title="Оставить мои правки" data-icon="x"></button>
+        </div>
+        <div id="viewer-body">
+          <div id="editor"></div>
+          <div id="diff-view"></div>
+          <div id="preview-view"></div>
+        </div>
+        <div id="viewer-status" class="viewer-status hidden">
+          <span id="vs-pos" class="vs-pos"></span>
+          <span id="vs-sel" class="vs-sel"></span>
+          <span id="vs-blame" class="vs-blame"></span>
+          <div class="drag-space-static"></div>
+          <span id="vs-lang" class="vs-lang"></span>
+        </div>
+      </section>
+      <section id="tree-pane" class="hidden">
+        <div class="pane-head">
+          <span id="tree-title">ДЕРЕВО</span>
+          <div class="drag-space-static"></div>
+          <button id="tree-new" class="icon-btn" title="Создать файл/папку в корне проекта" data-icon="plus"></button>
+          <button id="tree-refresh" class="icon-btn" title="Обновить дерево файлов" data-icon="refresh"></button>
+        </div>
+        <div id="tree"></div>
+      </section>
+      <!-- Git: секция «Коммит» (изменения + сообщение + commit/sync). Наполняет git-компонент. -->
+      <section id="commit-pane" class="hidden">
+        <div class="pane-head"><span>КОММИТ</span><div class="drag-space-static"></div></div>
+        <div id="commit-body" class="git-body commit-body"></div>
+      </section>
+      <!-- Git: «Ветки · История» — НИЖНЯЯ панель на всю ширину (PhpStorm Git tool window):
+           слева список коммитов/веток, справа дерево изменённых файлов выбранного коммита. -->
+      <section id="log-pane" class="hidden">
+        <div id="log-resize" class="log-resize" title="Потяните, чтобы изменить высоту"></div>
+        <div class="pane-head"><span>ВЕТКИ · ИСТОРИЯ</span><div class="drag-space-static"></div>
+          <button id="log-close" class="icon-btn" title="Скрыть панель" data-icon="x"></button></div>
+        <div id="branchlog-body" class="git-body branchlog-body"></div>
+      </section>
+    </div>
+  </div>
+
+  <div id="menu-layer"></div>
+  <div id="modal-root"></div>
+  <div id="toasts"></div>
+
+  <script src="dist/module-bundle.js"></script>
+</body>
+</html>
