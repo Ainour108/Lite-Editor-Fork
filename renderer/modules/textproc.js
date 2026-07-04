@@ -136,7 +136,7 @@ export function initTextProc(host) {
   let activeTabId = null;
   let nextTabId = 1;
   let activeProj = null;
-  let chatAgent = settings.tpAgent === 'codex' ? 'codex' : 'claude';
+  let chatAgent = ['claude', 'codex', 'antigravity'].includes(settings.tpAgent) ? settings.tpAgent : 'claude';
   let chatRole = 'Без роли';
   let chatLog = [];
   let aiSeq = 0;
@@ -610,7 +610,7 @@ export function initTextProc(host) {
     const box = $('#doc-ai-models');
     if (box.children.length === 0) {
       box.innerHTML = '<span class="tp-seg-thumb"></span>';
-      [['claude', 'Claude'], ['codex', 'Codex']].forEach(([id, lbl]) => {
+      [['claude', 'Claude'], ['codex', 'Codex'], ['antigravity', 'Gemini']].forEach(([id, lbl]) => {
         const btn = el('button', 'tp-seg-btn', lbl);
         btn.type = 'button';
         btn.dataset.id = id;
