@@ -142,6 +142,21 @@ export function initTextProc(host) {
   let aiSeq = 0;
   let treeSortMode = 'az';
   
+  function fileBadge(name) {
+    const ext = (name.split('.').pop() || '').toLowerCase();
+    const map = {
+      docx: { cls: 'docx', text: 'DOC' },
+      doc:  { cls: 'docx', text: 'DOC' },
+      md:   { cls: 'md',   text: 'M↓'  },
+      txt:  { cls: 'txt',  text: 'TXT' },
+    };
+    const m = map[ext] || { cls: 'other', text: '•' };
+    const el = document.createElement('span');
+    el.className = 'tp-file-badge tp-ext-' + m.cls;
+    el.textContent = m.text;
+    return el;
+  }
+  
   let dynamicRoles = ['Без роли'];
 
   const SYMBOLS = [
@@ -679,25 +694,33 @@ export function initTextProc(host) {
     addBtn.textContent = '+';
     addBtn.type = 'button';
     addBtn.title = 'Добавить роль';
-    addBtn.onclick = async () => {
-      if (!activeProj) return;
-      const newName = 'Новая роль ' + Date.now();
-      try {
-        const res = await lite.fs.writeFile(`${activeProj.path}/Roles/${newName}.md`, 'Действуй в роли...');
-        if (res && res.error) {
-          toast('Ошибка записи: ' + res.error, { kind: 'err' });
-          return;
-        }
-        await loadRoles();
-        if (typeof openProjectFile === 'function') {
-          openProjectFile(`${activeProj.path}/Roles/${newName}.md`);
-        } else {
-          toast('Роль создана, откройте её слева', { kind: 'info' });
-        }
-      } catch(e) { 
-        console.error(e);
-        toast('Системная ошибка: ' + e.message, { kind: 'err' });
+    addBtn.onclick = () => {
+      if (!activeProj) {
+        toast('Сначала откройте проект в боковой панели', { kind: 'warn' });
+        return;
       }
+      host.showPrompt('Новая роль', 'Название роли:', 'Моя роль', async (val) => {
+        if (!val) return;
+        const newName = val.trim();
+        if (!newName) return;
+        
+        try {
+          const res = await lite.fs.writeFile(`${activeProj.path}/Roles/${newName}.md`, 'Действуй в роли...');
+          if (res && res.error) {
+            toast('Ошибка записи: ' + res.error, { kind: 'err' });
+            return;
+          }
+          await loadRoles();
+          if (typeof openProjectFile === 'function') {
+            openProjectFile(`${activeProj.path}/Roles/${newName}.md`);
+          } else {
+            toast('Роль создана, откройте её слева', { kind: 'info' });
+          }
+        } catch(e) { 
+          console.error(e);
+          toast('Системная ошибка: ' + e.message, { kind: 'err' });
+        }
+      });
     };
     box.appendChild(addBtn);
   }
@@ -819,7 +842,38 @@ export function initTextProc(host) {
     try {
       treeContainer.innerHTML = '';
       
-      const buildTree = async (dirPath, container, level) => {
+      // Search functionality
+    const searchInput = $('#doc-tree-search');
+    if (searchInput) {
+      searchInput.oninput = (e) => {
+        const query = e.target.value.toLowerCase();
+        const items = document.querySelectorAll('.tp-tree-item, .tp-tree-folder');
+        items.forEach(item => {
+          if (item.textContent.toLowerCase().includes(query)) {
+            item.style.display = '';
+            // If it's a folder, ensure it's visible if children match
+            if (item.classList.contains('tp-tree-folder')) {
+              item.style.display = 'block';
+            }
+          } else {
+            item.style.display = 'none';
+          }
+        });
+        
+        // Ensure folders are shown if any child is visible
+        document.querySelectorAll('.tp-tree-folder').forEach(folder => {
+          const hasVisibleChild = Array.from(folder.querySelectorAll('.tp-tree-item')).some(child => child.style.display !== 'none');
+          if (hasVisibleChild) {
+            folder.style.display = 'block';
+            folder.querySelector('.tp-tree-folder-children').style.display = 'block';
+            const icon = folder.querySelector('.tp-tree-icon');
+            if (icon) icon.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
+          }
+        });
+      };
+    }
+
+    const buildTree = async (dirPath, container, level) => {
         const entries = await lite.fs.readDir(dirPath);
         
         let hasFiles = false;
@@ -849,6 +903,10 @@ export function initTextProc(host) {
           label.textContent = d.name;
           
           header.appendChild(icon);
+          const folderIcon = document.createElement('span');
+          folderIcon.className = 'tp-folder-glyph';
+          folderIcon.innerHTML = `<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>`;
+          header.appendChild(folderIcon);
           header.appendChild(label);
           folderDiv.appendChild(header);
           
@@ -882,11 +940,7 @@ export function initTextProc(host) {
           const item = document.createElement('div');
           item.className = 'tp-tree-item';
           
-          const iconSpan = document.createElement('span');
-          iconSpan.style.opacity = '0.5';
-          iconSpan.style.marginRight = '6px';
-          iconSpan.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-3px"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>`;
-          item.appendChild(iconSpan);
+          item.appendChild(fileBadge(f.name));
           
           const nameSpan = document.createElement('span');
           nameSpan.className = 'tp-tree-item-name';
