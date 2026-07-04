@@ -599,9 +599,10 @@ export function initTextProc(host) {
     const am = { role: 'agent', text: '', busy: true, reqId: 'tpq' + (++aiSeq) };
     chatLog.push(am);
     renderChatLog();
+    const offData = lite.tp.onData(({ reqId: r, chunk }) => { if (r !== am.reqId) return; am.text += chunk; renderChatLog(); });
     const offDone = lite.tp.onDone(({ reqId: r, text }) => { if (r !== am.reqId) return; am.busy = false; am.text = text || ''; cleanup(); renderChatLog(); });
     const offErr = lite.tp.onError(({ reqId: r, error }) => { if (r !== am.reqId) return; am.busy = false; am.text = 'Ошибка: ' + String(error); cleanup(); renderChatLog(); });
-    const cleanup = () => { try { offDone(); offErr(); } catch (_) {} };
+    const cleanup = () => { try { offData(); offDone(); offErr(); } catch (_) {} };
     
     const prompt = await composePrompt(sel, instruction);
     lite.tp.run({ reqId: am.reqId, agent: chatAgent, prompt });
