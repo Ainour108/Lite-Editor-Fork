@@ -225,7 +225,7 @@ try {
   const legacy = path.join(os.homedir(), '.LiteEditor');
   if (!fs.existsSync(storeDir) && fs.existsSync(legacy)) fs.cpSync(legacy, storeDir, { recursive: true });
 } catch (_) {}
-const STORE_KEYS = ['projects', 'settings', 'layout', 'recents', 'lastParent', 'categories', 'sectionOrder', 'accordions', 'dismissed', 'uiState', 'projTabs', 'openrouter', 'remote', 'shares', 'pultBlocked', 'dockerUi', 'dbConnections', 'dbUi', 'rhConnections', 'rhUi', 'textproc', 'tpPrompts', 'extData', 'extEnabled', 'quickbar', 'seoTargets', 'seoSites', 'moduleWins', 'mwLeft', 'bookmarks', 'promptSnippets', 'pomodoro', 'pomodoroLog', 'dbaiProviders', 'sessionSnaps'];
+const STORE_KEYS = ['projects', 'settings', 'layout', 'recents', 'lastParent', 'categories', 'sectionOrder', 'accordions', 'dismissed', 'uiState', 'projTabs', 'openrouter', 'remote', 'shares', 'pultBlocked', 'dockerUi', 'dbConnections', 'dbUi', 'rhConnections', 'rhUi', 'textproc', 'tpPrompts', 'extData', 'extEnabled', 'quickbar', 'seoTargets', 'seoSites', 'moduleWins', 'mwLeft', 'bookmarks', 'promptSnippets', 'pomodoro', 'pomodoroLog', 'dbaiProviders', 'sessionSnaps', 'autoModules'];
 // Папка-«стор» для шаринга с пультом (агент кладёт сюда файлы; в PTY доступна как $LITE_STORE).
 const pultStoreDir = path.join(storeDir, 'store');
 try { fs.mkdirSync(pultStoreDir, { recursive: true }); } catch (_) {}
@@ -240,11 +240,31 @@ function getPultShares() {
   for (const s of user) if (!seen.has(s.path)) { seen.add(s.path); out.push(s); }
   return out;
 }
-// Путь разрешён, только если он внутри одной из shares. Сверяем РЕАЛЬНЫЕ пути (realpath),
+// Путь разрешён, только если он внутри одной из shares или проектов. Сверяем РЕАЛЬНЫЕ пути (realpath),
 // иначе симлинк внутри шары (напр. store/evil → ~/.ssh) обошёл бы строковую проверку границы.
 function resolveInShares(p) {
-  let abs; try { abs = fs.realpathSync(path.resolve(p)); } catch (_) { return null; }
-  for (const s of getPultShares()) {
+  let current = path.resolve(String(p));
+  let abs = null;
+  while (true) {
+    try { abs = fs.realpathSync(current); break; }
+    catch (_) {
+      const parent = path.dirname(current);
+      if (parent === current) return null;
+      current = parent;
+    }
+  }
+  if (!abs) abs = path.resolve(String(p));
+
+  const shares = getPultShares();
+  const projects = readStoreKey('projects') || [];
+  for (const proj of projects) {
+    if (proj && proj.path) {
+      shares.push({ path: path.resolve(proj.path), name: proj.name });
+    }
+  }
+  shares.push({ path: storeDir, name: 'Стор' }); // Разрешить доступ к системной папке стора
+
+  for (const s of shares) {
     let base; try { base = fs.realpathSync(s.path); } catch (_) { continue; }
     if (abs === base || abs.startsWith(base + path.sep)) return abs;
   }
@@ -252,8 +272,31 @@ function resolveInShares(p) {
 }
 function ensureStoreDir() { try { fs.mkdirSync(storeDir, { recursive: true }); } catch (_) {} }
 function storeFile(key) { return path.join(storeDir, String(key).replace(/[^\w.-]/g, '_') + '.json'); }
+function encSecret(text) {
+  if (!text) return '';
+  try { if (safeStorage.isEncryptionAvailable()) return 'v1:' + safeStorage.encryptString(text).toString('base64'); } catch (_) {}
+  return 'b64:' + Buffer.from(String(text), 'utf8').toString('base64');
+}
+function decSecret(blob) {
+  if (!blob) return '';
+  try {
+    if (blob.startsWith('v1:')) return safeStorage.decryptString(Buffer.from(blob.slice(3), 'base64'));
+    if (blob.startsWith('b64:')) return Buffer.from(blob.slice(4), 'base64').toString('utf8');
+  } catch (_) {}
+  return '';
+}
+
 function readStoreKey(key) {
-  try { return JSON.parse(fs.readFileSync(storeFile(key), 'utf8')); }
+  try {
+    let data = JSON.parse(fs.readFileSync(storeFile(key), 'utf8'));
+    if (key === 'openrouter' && Array.isArray(data)) {
+      data = data.map(c => {
+        if (c.keyEnc) c.key = decSecret(c.keyEnc);
+        return c;
+      });
+    }
+    return data;
+  }
   // ENOENT just means "never written yet" (normal); anything else (bad JSON, perms) is worth logging.
   catch (e) { if (e && e.code !== 'ENOENT') logger.log('error', 'store', `read '${key}' failed`, e); return undefined; }
 }
@@ -272,7 +315,19 @@ function atomicWriteSync(file, data) {
 // log it; the boolean lets callers that DO care (import) detect a partial failure.
 function writeStoreKey(key, value) {
   ensureStoreDir();
-  try { atomicWriteSync(storeFile(key), JSON.stringify(value)); return true; }
+  try {
+    let out = value;
+    if (key === 'openrouter' && Array.isArray(value)) {
+      out = value.map(c => {
+        const copy = { ...c };
+        if (copy.key && !copy.keyEnc) { copy.keyEnc = encSecret(copy.key); }
+        if (copy.keyEnc) { copy.key = ''; } // don't store plaintext
+        return copy;
+      });
+    }
+    atomicWriteSync(storeFile(key), JSON.stringify(out));
+    return true;
+  }
   catch (e) { logger.log('error', 'store', `write '${key}' failed`, e); return false; }
 }
 ensureStoreDir();
@@ -438,7 +493,8 @@ ipcMain.handle('openrouter:histSet', (_e, { id, messages }) => {
 });
 ipcMain.handle('openrouter:models', async (_e, { key } = {}) => {
   return await new Promise((resolve) => {
-    const req = https.request(OR_BASE + '/models', { method: 'GET', headers: orHeaders(key) }, (res) => {
+    const req = require('electron').net.request({ url: OR_BASE + '/models', method: 'GET', headers: orHeaders(key) });
+    req.on('response', (res) => {
       let data = '';
       res.on('data', (c) => { data += c; });
       res.on('end', () => {
@@ -457,7 +513,9 @@ ipcMain.handle('openrouter:models', async (_e, { key } = {}) => {
       });
     });
     req.on('error', (e) => resolve({ error: String(e.message || e) }));
-    req.setTimeout(20000, () => { req.destroy(); resolve({ error: 'таймаут запроса моделей' }); });
+    const t = setTimeout(() => { req.destroy(); resolve({ error: 'таймаут запроса моделей' }); }, 20000);
+    req.on('response', (res) => res.on('end', () => clearTimeout(t)));
+    req.on('error', () => clearTimeout(t));
     req.end();
   });
 });
@@ -468,10 +526,11 @@ ipcMain.handle('openrouter:models', async (_e, { key } = {}) => {
 const GH_REPO = 'DanielLetto2020/LiteEditorAI';
 ipcMain.handle('update:check', async () => {
   return await new Promise((resolve) => {
-    const req = https.request(
-      `https://api.github.com/repos/${GH_REPO}/releases/latest`,
-      { method: 'GET', headers: { 'User-Agent': 'LiteEditorAI', 'Accept': 'application/vnd.github+json' } },
-      (res) => {
+    const req = require('electron').net.request({
+      url: `https://api.github.com/repos/${GH_REPO}/releases/latest`,
+      method: 'GET', headers: { 'User-Agent': 'LiteEditorAI', 'Accept': 'application/vnd.github+json' }
+    });
+    req.on('response', (res) => {
         let data = '';
         res.on('data', (c) => { data += c; });
         res.on('end', () => {
@@ -484,14 +543,17 @@ ipcMain.handle('update:check', async () => {
       },
     );
     req.on('error', (e) => resolve({ error: String(e.message || e) }));
-    req.setTimeout(15000, () => { req.destroy(); resolve({ error: 'таймаут проверки обновления' }); });
+    const t = setTimeout(() => { req.destroy(); resolve({ error: 'таймаут проверки обновления' }); }, 15000);
+    req.on('response', (res) => res.on('end', () => clearTimeout(t)));
+    req.on('error', () => clearTimeout(t));
     req.end();
   });
 });
 // Key balance: GET /key → credit limit + usage (so the card can show «израсходовано / лимит»).
 ipcMain.handle('openrouter:keyInfo', async (_e, { key } = {}) => {
   return await new Promise((resolve) => {
-    const req = https.request(OR_BASE + '/key', { method: 'GET', headers: orHeaders(key) }, (res) => {
+    const req = require('electron').net.request({ url: OR_BASE + '/key', method: 'GET', headers: orHeaders(key) });
+    req.on('response', (res) => {
       let data = '';
       res.on('data', (c) => { data += c; });
       res.on('end', () => {
@@ -504,7 +566,9 @@ ipcMain.handle('openrouter:keyInfo', async (_e, { key } = {}) => {
       });
     });
     req.on('error', (e) => resolve({ error: String(e.message || e) }));
-    req.setTimeout(15000, () => { req.destroy(); resolve({ error: 'таймаут' }); });
+    const t = setTimeout(() => { req.destroy(); resolve({ error: 'таймаут' }); }, 15000);
+    req.on('response', (res) => res.on('end', () => clearTimeout(t)));
+    req.on('error', () => clearTimeout(t));
     req.end();
   });
 });
@@ -512,9 +576,11 @@ const orReqs = new Map(); // reqId -> ClientRequest (for abort)
 ipcMain.on('openrouter:chatStart', (e, { reqId, key, model, messages, temperature } = {}) => {
   const sender = e.sender;
   const body = JSON.stringify({ model, messages, stream: true, ...(typeof temperature === 'number' ? { temperature } : {}) });
-  const req = https.request(OR_BASE + '/chat/completions',
-    { method: 'POST', headers: { ...orHeaders(key), 'Content-Length': Buffer.byteLength(body) } },
-    (res) => {
+  const req = require('electron').net.request({
+    url: OR_BASE + '/chat/completions',
+    method: 'POST', headers: { ...orHeaders(key), 'Content-Length': Buffer.byteLength(body) }
+  });
+  req.on('response', (res) => {
       if (res.statusCode >= 400) { // surface the API error body (bad key, no credit, bad model…)
         let errData = '';
         res.on('data', (c) => { errData += c; });
@@ -559,7 +625,9 @@ ipcMain.on('openrouter:chatStart', (e, { reqId, key, model, messages, temperatur
       res.on('end', () => { if (!orReqs.has(reqId)) return; orReqs.delete(reqId); safeSend(sender, 'openrouter:done', { reqId }); });
     });
   req.on('error', (err) => { if (!orReqs.has(reqId)) return; orReqs.delete(reqId); safeSend(sender, 'openrouter:error', { reqId, error: String(err.message || err) }); });
-  req.setTimeout(120000, () => { req.destroy(); if (!orReqs.has(reqId)) return; orReqs.delete(reqId); safeSend(sender, 'openrouter:error', { reqId, error: 'таймаут запроса' }); });
+  const t = setTimeout(() => { req.destroy(); if (!orReqs.has(reqId)) return; orReqs.delete(reqId); safeSend(sender, 'openrouter:error', { reqId, error: 'таймаут запроса' }); }, 120000);
+  req.on('response', (res) => res.on('end', () => clearTimeout(t)));
+  req.on('error', () => clearTimeout(t));
   orReqs.set(reqId, req);
   req.write(body); req.end();
 });
@@ -576,8 +644,9 @@ ipcMain.on('openrouter:chatAbort', (e, { reqId } = {}) => {
 const tpDir = path.join(storeDir, 'textproc');
 ipcMain.handle('tp:dir', () => { try { fs.mkdirSync(tpDir, { recursive: true }); } catch (_) {} return tpDir; });
 // Обработка текста: нативные Открыть/Сохранить как (вместо браузерного File API/download — см. handoff design).
-ipcMain.handle('tp:openFile', async () => {
-  const res = await dialog.showOpenDialog(mainWindow, {
+ipcMain.handle('tp:openFile', async (e) => {
+  const win = BrowserWindow.fromWebContents(e.sender) || mainWindow;
+  const res = await dialog.showOpenDialog(win, {
     title: 'Открыть документ', properties: ['openFile'],
     filters: [
       { name: 'Документы', extensions: ['md', 'markdown', 'txt', 'html', 'htm'] },
@@ -595,10 +664,11 @@ ipcMain.handle('tp:openFile', async () => {
     return { ok: true, file, name: path.basename(file), content };
   } catch (e) { return { ok: false, error: 'Не удалось прочитать файл: ' + String(e.message || e) }; }
 });
-ipcMain.handle('tp:saveFileAs', async (_e, { content, name, ext } = {}) => {
+ipcMain.handle('tp:saveFileAs', async (e, { content, name, ext } = {}) => {
+  const win = BrowserWindow.fromWebContents(e.sender) || mainWindow;
   const last = loadState().lastOpenDir;
   const base = String(name || 'Безымянный').replace(/[\/\\:*?"<>|]+/g, '_').replace(/\.[^.]+$/, '');
-  const res = await dialog.showSaveDialog(mainWindow, {
+  const res = await dialog.showSaveDialog(win, {
     title: 'Сохранить документ как',
     defaultPath: path.join(last && fs.existsSync(last) ? last : os.homedir(), `${base}.${ext || 'md'}`),
     filters: [
@@ -2146,10 +2216,10 @@ function relayPost(host, pathname, body, extraHeaders) {
     let data;
     try { data = Buffer.from(JSON.stringify(body)); } catch (_) { resolve({ status: 0, error: 'bad body' }); return; }
     const headers = Object.assign({ 'Content-Type': 'application/json', 'Content-Length': data.length }, extraHeaders || {});
-    const req = https.request(
-      { host, path: pathname, method: 'POST', headers, timeout: 12000 },
-      (res) => { let buf = ''; res.on('data', (d) => (buf += d)); res.on('end', () => { let j = null; try { j = JSON.parse(buf); } catch (_) {} resolve({ status: res.statusCode, body: j }); }); }
+    const req = require('electron').net.request(
+      { url: 'https://' + host + pathname, method: 'POST', headers, timeout: 12000 }
     );
+    req.on('response', (res) => { let buf = ''; res.on('data', (d) => (buf += d)); res.on('end', () => { let j = null; try { j = JSON.parse(buf); } catch (_) {} resolve({ status: res.statusCode, body: j }); }); });
     req.on('timeout', () => { req.destroy(); resolve({ status: 0, error: 'timeout' }); });
     req.on('error', (e) => resolve({ status: 0, error: String(e && e.message || e) }));
     req.write(data); req.end();
@@ -2539,6 +2609,7 @@ ipcMain.handle('pty:foregroundState', (_e, { id }) => {
 
 // ---------------------------------------------------------------- filesystem
 ipcMain.handle('fs:readDir', async (_e, dir) => {
+  if (!resolveInShares(dir)) return { error: 'доступ запрещен (вне workspace)' };
   try {
     const entries = await fs.promises.readdir(dir, { withFileTypes: true });
     const out = await Promise.all(entries.map(async (d) => {
@@ -2554,6 +2625,7 @@ ipcMain.handle('fs:readDir', async (_e, dir) => {
   } catch (err) { return { error: String(err.message || err) }; }
 });
 ipcMain.handle('fs:readFile', async (_e, file) => {
+  if (!resolveInShares(file)) return { error: 'доступ запрещен (вне workspace)' };
   try {
     const stat = await fs.promises.stat(file);
     if (stat.size > MAX_VIEW_BYTES) return { error: `Файл слишком большой (${Math.round(stat.size / 1024)} КБ)` };
@@ -2561,26 +2633,29 @@ ipcMain.handle('fs:readFile', async (_e, file) => {
   } catch (err) { return { error: String(err.message || err) }; }
 });
 ipcMain.handle('fs:writeFile', async (_e, { file, content }) => {
+  if (!resolveInShares(file)) return { error: 'доступ запрещен (вне workspace)' };
   try { await fs.promises.writeFile(file, content, 'utf8'); return { ok: true }; }
   catch (err) { return { error: String(err.message || err) }; }
 });
 ipcMain.handle('fs:mkdir', async (_e, { parent, name }) => {
   const safe = safeChildName(name);                       // блокируем ../ и сепараторы (PC-3)
   if (!safe) return { error: 'недопустимое имя' };
+  const full = path.join(parent, safe);
+  if (!resolveInShares(full)) return { error: 'доступ запрещен (вне workspace)' };
   try {
-    const full = path.join(parent, safe);
     await fs.promises.mkdir(full, { recursive: false });
     return { path: full, name: safe };
   } catch (err) { return { error: String(err.message || err) }; }
 });
-ipcMain.handle('fs:exists', (_e, p) => { try { return fs.existsSync(p); } catch { return false; } });
+ipcMain.handle('fs:exists', (_e, p) => { if (!resolveInShares(p)) return false; try { return fs.existsSync(p); } catch { return false; } });
 
 // create a file or directory inside parent
 ipcMain.handle('fs:create', async (_e, { parent, name, dir }) => {
   const safe = safeChildName(name);                       // блокируем ../ и сепараторы (PC-3)
   if (!safe) return { error: 'недопустимое имя' };
+  const full = path.join(parent, safe);
+  if (!resolveInShares(full)) return { error: 'доступ запрещен (вне workspace)' };
   try {
-    const full = path.join(parent, safe);
     if (fs.existsSync(full)) return { error: 'уже существует' };
     if (dir) await fs.promises.mkdir(full, { recursive: false });
     else { await fs.promises.mkdir(path.dirname(full), { recursive: true }); await fs.promises.writeFile(full, '', { flag: 'wx' }); }
@@ -2588,6 +2663,7 @@ ipcMain.handle('fs:create', async (_e, { parent, name, dir }) => {
   } catch (err) { return { error: String(err.message || err) }; }
 });
 ipcMain.handle('fs:rename', async (_e, { from, to }) => {
+  if (!resolveInShares(from) || !resolveInShares(to)) return { error: 'доступ запрещен (вне workspace)' };
   try {
     if (fs.existsSync(to)) return { error: 'цель уже существует' };
     await fs.promises.rename(from, to);
@@ -2596,12 +2672,14 @@ ipcMain.handle('fs:rename', async (_e, { from, to }) => {
 });
 // delete → OS trash (recoverable), not rm
 ipcMain.handle('fs:trash', async (_e, target) => {
+  if (!resolveInShares(target)) return { error: 'доступ запрещен (вне workspace)' };
   try { await shell.trashItem(target); return { ok: true }; }
   catch (err) { return { error: String(err.message || err) }; }
 });
 // Перемещение узла внутри дерева (drag-and-drop): src → destDir/<имя>. Те же грабли, что у rename
 // (цель существует, EXDEV cross-device), плюс запрет затащить папку внутрь себя/своего потомка.
 ipcMain.handle('fs:move', async (_e, { src, destDir }) => {
+  if (!resolveInShares(src) || !resolveInShares(destDir)) return { error: 'доступ запрещен (вне workspace)' };
   try {
     if (!src || !destDir) return { error: 'нет пути' };
     if (!fs.existsSync(src)) return { error: 'источник не найден' };
@@ -2627,6 +2705,7 @@ ipcMain.handle('fs:move', async (_e, { src, destDir }) => {
 // Втянуть файл/папку извне (drag из файлового менеджера ОС) → копией в destDir. Имя-коллизия →
 // добавляем « (2)», « (3)»… (как в проводниках), чтобы не перезаписать существующее.
 ipcMain.handle('fs:import', async (_e, { src, destDir }) => {
+  if (!resolveInShares(destDir)) return { error: 'доступ запрещен (вне workspace)' };
   try {
     if (!src || !destDir) return { error: 'нет пути' };
     if (!fs.existsSync(src)) return { error: 'источник не найден' };
@@ -2648,6 +2727,7 @@ ipcMain.handle('fs:import', async (_e, { src, destDir }) => {
 // binary file → data: URL (for image preview under our CSP, which blocks file://)
 const IMG_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon', avif: 'image/avif' };
 ipcMain.handle('fs:readDataUrl', async (_e, file) => {
+  if (!resolveInShares(file)) return { error: 'доступ запрещен (вне workspace)' };
   try {
     const stat = await fs.promises.stat(file);
     if (stat.size > 12 * 1024 * 1024) return { error: 'файл слишком большой для превью' };

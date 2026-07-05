@@ -124,7 +124,7 @@ function htmlToMd(root) {
 }
 
 export function initTextProc(host) {
-  const { el, toast, showConfirm, settings, saveSettings, saveUiState, refitActiveTerminal, closeOtherPanels, layout, GUTTER } = host;
+  const { el, icon, toast, showConfirm, settings, saveSettings, saveUiState, refitActiveTerminal, closeOtherPanels, layout, GUTTER, STORE, persist } = host;
   const lite = window.lite;
 
   let docOpen = false;
@@ -135,7 +135,33 @@ export function initTextProc(host) {
   let openTabs = [];
   let activeTabId = null;
   let nextTabId = 1;
-  let activeProj = null;
+  // Восстанавливаем вкладки, открытые в прошлый раз (переживает перезапуск приложения —
+  // до этого openTabs жил только в памяти и терялся при закрытии окна).
+  let restoredActiveTabId = null;
+  {
+    const saved = STORE && STORE.textproc;
+    if (saved && Array.isArray(saved.tabs) && saved.tabs.length) {
+      openTabs = saved.tabs.map((t) => ({
+        id: t.id, absPath: t.absPath || null, name: t.name || 'Безымянный',
+        html: t.html || '<p><br></p>', md: t.md || '',
+        mode: t.mode === 'markdown' ? 'markdown' : 'wysiwyg', dirty: !!t.dirty,
+      }));
+      nextTabId = openTabs.reduce((m, t) => Math.max(m, t.id), 0) + 1;
+      restoredActiveTabId = openTabs.some((t) => t.id === saved.activeTabId) ? saved.activeTabId : openTabs[0].id;
+    }
+  }
+  let persistTabsTimer = null;
+  function persistTabs() {
+    if (typeof persist !== 'function') return;
+    clearTimeout(persistTabsTimer);
+    persistTabsTimer = setTimeout(() => {
+      persist('textproc', {
+        activeTabId,
+        tabs: openTabs.map((t) => ({ id: t.id, absPath: t.absPath, name: t.name, html: t.html, md: t.md, mode: t.mode, dirty: t.dirty })),
+      });
+    }, 600);
+  }
+  const getActiveProj = () => host.activeProject();
   let chatAgent = ['claude', 'codex', 'antigravity'].includes(settings.tpAgent) ? settings.tpAgent : 'claude';
   let chatRole = 'Без роли';
   let chatLog = [];
@@ -149,6 +175,14 @@ export function initTextProc(host) {
       doc:  { cls: 'docx', text: 'DOC' },
       md:   { cls: 'md',   text: 'M↓'  },
       txt:  { cls: 'txt',  text: 'TXT' },
+      pdf:  { cls: 'pdf',  text: 'PDF' },
+      html: { cls: 'html', text: '<>'  },
+      json: { cls: 'json', text: '{ }' },
+      canvas: { cls: 'canvas', text: '🎨' },
+      csv:  { cls: 'csv',  text: 'CSV' },
+      png:  { cls: 'img',  text: 'IMG' },
+      jpg:  { cls: 'img',  text: 'IMG' },
+      jpeg: { cls: 'img',  text: 'IMG' },
     };
     const m = map[ext] || { cls: 'other', text: '•' };
     const el = document.createElement('span');
@@ -217,6 +251,18 @@ export function initTextProc(host) {
     $('#doc-toggle-inspector').onclick = () => $('#doc-inspector').classList.toggle('collapsed');
     const toggleSidebarBtn = $('#doc-toggle-sidebar');
     if (toggleSidebarBtn) toggleSidebarBtn.onclick = toggleSidebar;
+    const numBtn = $('#doc-toggle-numbering');
+    if (numBtn) {
+      numBtn.onclick = () => {
+        settings.tpShowParaNum = !settings.tpShowParaNum;
+        saveSettings();
+        updateNumberingUI();
+      };
+      updateNumberingUI();
+    }
+    const wysiwygEl = $('#doc-editor-wysiwyg');
+    wysiwygEl.addEventListener('mouseup', maybeShowSelectionUI);
+    wysiwygEl.addEventListener('dblclick', () => setTimeout(maybeShowSelectionUI, 0));
 
     $$('[data-cmd]').forEach((node) => {
       if (node.classList.contains('tp-dropdown')) return;
@@ -280,13 +326,13 @@ export function initTextProc(host) {
           const zoomSpeed = 0.01;
           window.tpCurrentZoom -= e.deltaY * zoomSpeed;
           window.tpCurrentZoom = Math.max(0.25, Math.min(window.tpCurrentZoom, 3.0));
-          
+
           const page = document.querySelector('.tp-page');
           if (page) {
             page.style.transform = `scale(${window.tpCurrentZoom})`;
             page.style.transformOrigin = 'top center';
           }
-          
+
           const zoomBtn = document.querySelector('#doc-zoom-dd .tp-dd-btn span:first-child');
           if (zoomBtn) {
             zoomBtn.textContent = Math.round(window.tpCurrentZoom * 100) + '%';
@@ -322,7 +368,20 @@ export function initTextProc(host) {
     $('#doc-ai-chat-input').onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } };
 
     $('#doc-editor-wysiwyg').addEventListener('input', markDirty);
+    $('#doc-editor-wysiwyg').addEventListener('input', scheduleScrubberUpdate);
     $('#doc-editor-md').addEventListener('input', markDirty);
+    const scrubTrack = $('#doc-scrubber-track');
+    if (scrubTrack) {
+      scrubTrack.addEventListener('mousedown', (e) => {
+        if (e.target.classList.contains('tp-scrubber-tick')) return; // клик по метке — свой обработчик (переход), не drag
+        scrubberDragging = true;
+        handleScrubberDrag(e);
+      });
+      window.addEventListener('mousemove', (e) => { if (scrubberDragging) handleScrubberDrag(e); });
+      window.addEventListener('mouseup', () => { scrubberDragging = false; });
+    }
+    const canvasEl = document.querySelector('.tp-canvas');
+    if (canvasEl) canvasEl.addEventListener('scroll', updateScrubberThumb);
     $('#doc-editor-wysiwyg').addEventListener('click', (e) => {
       const btn = e.target.closest('.tp-formula-toggle');
       if (btn) { e.preventDefault(); btn.parentElement.classList.toggle('show-src'); }
@@ -411,6 +470,69 @@ export function initTextProc(host) {
     updateThumb($('#doc-mode-toggle'), activeBtn);
     $('#doc-editor-wysiwyg').hidden = mode !== 'wysiwyg';
     $('#doc-editor-md').hidden = mode !== 'markdown';
+    updateNumberingUI();
+    renderScrubber();
+  }
+  // Номера абзацев — только в WYSIWYG (в исходном Markdown они не имеют смысла).
+  function updateNumberingUI() {
+    const btn = $('#doc-toggle-numbering');
+    const on = !!settings.tpShowParaNum && mode === 'wysiwyg';
+    $('#doc-editor-wysiwyg').classList.toggle('tp-numbered', on);
+    if (btn) {
+      btn.classList.toggle('on', on);
+      btn.disabled = mode !== 'wysiwyg';
+      btn.style.opacity = mode !== 'wysiwyg' ? '0.4' : '';
+    }
+  }
+
+  // ---- Рейка-навигатор: метки заголовков + бегунок текущей позиции (рядом с обычным скроллом) ----
+  let scrubberDragging = false;
+  let scrubberDebounceTimer = null;
+  function computeHeadingMarks() {
+    const doc = $('#doc-editor-wysiwyg');
+    if (!doc) return [];
+    const total = doc.scrollHeight || 1;
+    return $$('#doc-editor-wysiwyg h1, #doc-editor-wysiwyg h2, #doc-editor-wysiwyg h3').map((h) => ({
+      el: h,
+      level: h.tagName.toLowerCase(),
+      text: h.textContent.trim().slice(0, 60),
+      ratio: Math.max(0, Math.min(1, h.offsetTop / total)),
+    }));
+  }
+  function renderScrubber() {
+    const track = $('#doc-scrubber-track');
+    if (!track || mode !== 'wysiwyg') { if (track) track.innerHTML = ''; return; }
+    const marks = computeHeadingMarks();
+    track.innerHTML = '';
+    marks.forEach((m) => {
+      const tick = el('div', 'tp-scrubber-tick tp-scrubber-tick-' + m.level);
+      tick.style.top = (m.ratio * 100) + '%';
+      tick.title = m.text;
+      tick.onclick = (e) => { e.stopPropagation(); m.el.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+      track.appendChild(tick);
+    });
+    track.appendChild(el('div', 'tp-scrubber-thumb'));
+    updateScrubberThumb();
+  }
+  function updateScrubberThumb() {
+    const canvas = document.querySelector('.tp-canvas');
+    const thumb = document.querySelector('#doc-scrubber-track .tp-scrubber-thumb');
+    if (!canvas || !thumb) return;
+    const maxScroll = canvas.scrollHeight - canvas.clientHeight;
+    const ratio = maxScroll > 0 ? canvas.scrollTop / maxScroll : 0;
+    thumb.style.top = (ratio * 100) + '%';
+  }
+  function handleScrubberDrag(e) {
+    const track = $('#doc-scrubber-track');
+    const canvas = document.querySelector('.tp-canvas');
+    if (!track || !canvas) return;
+    const r = track.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientY - r.top) / r.height));
+    canvas.scrollTop = ratio * (canvas.scrollHeight - canvas.clientHeight);
+  }
+  function scheduleScrubberUpdate() {
+    clearTimeout(scrubberDebounceTimer);
+    scrubberDebounceTimer = setTimeout(renderScrubber, 800);
   }
   function setTab(t) {
     let activeBtn = null;
@@ -460,7 +582,7 @@ export function initTextProc(host) {
     
     // Check if openProjectFile exists (we will inject it shortly), else fallback
     if (typeof openProjectFile === 'function') {
-      openProjectFile(res.file);
+      openProjectFile(res.file, res.content);
     } else {
       currentFile = res.file; currentName = res.name;
       const isHtml = /\.html?$/i.test(res.name);
@@ -549,6 +671,12 @@ export function initTextProc(host) {
     if (sel && !sel.isCollapsed && getActiveEditor().contains(sel.anchorNode)) return { text: sel.toString(), whole: false };
     return { text: currentMarkdown(), whole: true };
   }
+  // Синхронизирует номера, которые видит AI, с номерами абзацев, которые видит пользователь
+  // (см. .tp-doc.tp-numbered в CSS) — блоки Markdown разбиваются так же, как их видит marked.parse().
+  function numberedMarkdownForAI(md) {
+    const blocks = String(md || '').split(/\n{2,}/).filter((b) => b.trim().length);
+    return blocks.map((b, i) => `[${i + 1}] ${b.trim()}`).join('\n\n');
+  }
   function renderChatLog() {
     const box = $('#doc-ai-chat-log');
     box.innerHTML = '';
@@ -578,15 +706,20 @@ export function initTextProc(host) {
     const parts = [];
     if (chatRole !== 'Без роли') {
       try {
-        const content = await lite.fs.readFile(`${activeProj.path}/Roles/${chatRole}.md`);
+        const content = await lite.fs.readFile(`${getActiveProj().path}/Roles/${chatRole}.md`);
         parts.push(`Действуй в роли: ${chatRole}\n${content}`);
       } catch (e) {
         parts.push(`Действуй в роли: ${chatRole}`);
       }
     }
     parts.push(instruction);
-    parts.push('Ниже — ' + (sel.whole ? 'весь документ (Markdown)' : 'фрагмент текста') + '. Верни ТОЛЬКО итоговый текст для замены: без пояснений, без приветствий.');
-    parts.push('===ФРАГМЕНТ===\n' + sel.text + '\n===КОНЕЦ===');
+    if (sel.whole) {
+      parts.push('Ниже — весь документ (Markdown), разбитый на пронумерованные абзацы вида "[N] текст". Эти номера соответствуют номерам, которые пользователь видит рядом с абзацами в редакторе — используй их только чтобы понять, о каком абзаце идёт речь (например «исправь абзац 5» = блок [5]). Верни ТОЛЬКО итоговый текст для замены: без пояснений, без приветствий, без самих меток [N].');
+      parts.push('===ФРАГМЕНТ===\n' + numberedMarkdownForAI(sel.text) + '\n===КОНЕЦ===');
+    } else {
+      parts.push('Ниже — фрагмент текста. Верни ТОЛЬКО итоговый текст для замены: без пояснений, без приветствий.');
+      parts.push('===ФРАГМЕНТ===\n' + sel.text + '\n===КОНЕЦ===');
+    }
     return parts.join('\n\n');
   }
   async function sendChat() {
@@ -609,7 +742,7 @@ export function initTextProc(host) {
   }
   function renderModels() {
     const box = $('#doc-ai-models');
-    if (box.children.length === 0) {
+    if (!box.querySelector('button')) {
       box.innerHTML = '<span class="tp-seg-thumb"></span>';
       [['claude', 'Claude'], ['codex', 'Codex'], ['antigravity', 'Gemini']].forEach(([id, lbl]) => {
         const btn = el('button', 'tp-seg-btn', lbl);
@@ -631,12 +764,12 @@ export function initTextProc(host) {
     requestAnimationFrame(() => updateThumb(box, activeBtn));
   }
   async function loadRoles() {
-    if (!activeProj) return;
+    if (!getActiveProj()) return;
     try {
-      const rolesPath = activeProj.path + '/Roles';
+      const rolesPath = getActiveProj().path + '/Roles';
       const hasDir = await lite.fs.exists(rolesPath);
       if (!hasDir) {
-        await lite.fs.mkdir(activeProj.path, 'Roles');
+        await lite.fs.mkdir(getActiveProj().path, 'Roles');
         await lite.fs.writeFile(rolesPath + '/Редактор.md', 'Исправь ошибки и опечатки.');
         await lite.fs.writeFile(rolesPath + '/Корректор.md', 'Сделай текст более профессиональным.');
         await lite.fs.writeFile(rolesPath + '/Переводчик.md', 'Переведи текст на английский язык.');
@@ -675,12 +808,12 @@ export function initTextProc(host) {
           dd.style.minWidth = '180px';
           dd.appendChild(host.menuRow('pencil', 'Редактировать', () => {
             host.closeMenus();
-            openProjectFile(`${activeProj.path}/Roles/${r}.md`);
+            openProjectFile(`${getActiveProj().path}/Roles/${r}.md`);
           }));
           dd.appendChild(host.menuRow('trash', 'Удалить', async () => {
             host.closeMenus();
             try {
-              await lite.fs.trash(`${activeProj.path}/Roles/${r}.md`);
+              await lite.fs.trash(`${getActiveProj().path}/Roles/${r}.md`);
               await loadRoles();
             } catch (err) { console.error(err); host.toast('Ошибка: ' + err.message, { kind: 'err' }); }
           }, 'danger'));
@@ -696,7 +829,7 @@ export function initTextProc(host) {
     addBtn.type = 'button';
     addBtn.title = 'Добавить роль';
     addBtn.onclick = () => {
-      if (!activeProj) {
+      if (!getActiveProj()) {
         toast('Сначала откройте проект в боковой панели', { kind: 'warn' });
         return;
       }
@@ -706,14 +839,14 @@ export function initTextProc(host) {
         if (!newName) return;
         
         try {
-          const res = await lite.fs.writeFile(`${activeProj.path}/Roles/${newName}.md`, 'Действуй в роли...');
+          const res = await lite.fs.writeFile(`${getActiveProj().path}/Roles/${newName}.md`, 'Действуй в роли...');
           if (res && res.error) {
             toast('Ошибка записи: ' + res.error, { kind: 'err' });
             return;
           }
           await loadRoles();
           if (typeof openProjectFile === 'function') {
-            openProjectFile(`${activeProj.path}/Roles/${newName}.md`);
+            openProjectFile(`${getActiveProj().path}/Roles/${newName}.md`);
           } else {
             toast('Роль создана, откройте её слева', { kind: 'info' });
           }
@@ -740,15 +873,118 @@ export function initTextProc(host) {
   document.addEventListener('selectionchange', () => {
     if (!docOpen) return;
     const ctxText = $('#doc-ai-ctx-text');
-    if (!ctxText) return;
     const sel = window.getSelection();
-    if (sel && !sel.isCollapsed && getActiveEditor().contains(sel.anchorNode)) {
-      const text = sel.toString();
-      if (text.trim()) { ctxText.textContent = text.slice(0, 100) + (text.length > 100 ? '…' : ''); ctxText.classList.add('filled'); return; }
+    const hasSel = sel && !sel.isCollapsed && getActiveEditor().contains(sel.anchorNode) && sel.toString().trim();
+    if (ctxText) {
+      if (hasSel) { const text = sel.toString(); ctxText.textContent = text.slice(0, 100) + (text.length > 100 ? '…' : ''); ctxText.classList.add('filled'); }
+      else { ctxText.textContent = 'Выделите фрагмент в документе — он попадёт сюда. Ответ можно вставить кнопкой «Заменить».'; ctxText.classList.remove('filled'); }
     }
-    ctxText.textContent = 'Выделите фрагмент в документе — он попадёт сюда. Ответ можно вставить кнопкой «Заменить».';
-    ctxText.classList.remove('filled');
+    if (!hasSel) hideSelPopup();
   });
+
+  // ---- Плавающий попап при выделении: панель форматирования + мини-вопрос к AI ----
+  // Переиспользует execCmd()/sendChat()/selForChat() как есть — только показывает/позиционирует
+  // готовый UI поверх существующего pipeline, ничего в нём не дублирует.
+  let selPopupEl = null;
+  let selPopupRange = null; // сохранённый Range — фокус на инпуте попапа может сбить window.getSelection()
+
+  // Реплика паттерна placeMenu() из renderer.js (другой bundle, недоступен отсюда напрямую):
+  // append → задать left/top от диапазона выделения → getBoundingClientRect() → clamp по вьюпорту.
+  function positionNearRange(node, range, side) {
+    node.hidden = false;
+    const r = range.getBoundingClientRect();
+    const nr = node.getBoundingClientRect();
+    let x = r.left + r.width / 2 - nr.width / 2;
+    let y = side === 'below' ? r.bottom + 8 : r.top - nr.height - 8;
+    x = Math.max(8, Math.min(x, window.innerWidth - nr.width - 8));
+    y = Math.max(8, Math.min(y, window.innerHeight - nr.height - 8));
+    node.style.left = x + 'px';
+    node.style.top = y + 'px';
+  }
+  function ensureSelPopup() {
+    if (selPopupEl) return selPopupEl;
+    const wrap = el('div', 'tp-sel-popup');
+    const fmtRow = el('div', 'tp-sel-popup-fmt');
+    [['bold', 'Жирный'], ['italic', 'Курсив'], ['underline', 'Подчёркнутый']].forEach(([cmd, title]) => {
+      const btn = host.iconBtn('tp-pill-btn', cmd, title);
+      btn.dataset.cmd = cmd;
+      fmtRow.appendChild(btn);
+    });
+    fmtRow.appendChild(el('span', 'tp-pill-sep'));
+    const listBtn = host.iconBtn('tp-pill-btn', 'list', 'Список');
+    listBtn.dataset.cmd = 'insertUnorderedList';
+    fmtRow.appendChild(listBtn);
+
+    const row = el('div', 'tp-sel-popup-row');
+    row.appendChild(el('span', 'tp-sel-popup-arrow', '↳'));
+    const input = document.createElement('input');
+    input.type = 'text'; input.className = 'tp-sel-popup-input'; input.placeholder = 'Задать вопрос по теме…';
+    row.appendChild(input);
+    const send = host.iconBtn('tp-sel-popup-send', 'send', 'Отправить');
+    row.appendChild(send);
+
+    wrap.appendChild(fmtRow);
+    wrap.appendChild(row);
+    document.getElementById('menu-layer').appendChild(wrap);
+    wrap.hidden = true;
+    wrap.onmousedown = (e) => e.stopPropagation(); // не терять выделение кликом по попапу
+
+    wrap.querySelectorAll('[data-cmd]').forEach((btn) => {
+      btn.onmousedown = (e) => e.preventDefault(); // не терять выделение на mousedown (как у .tp-pill)
+      btn.onclick = (e) => {
+        e.preventDefault();
+        if (selPopupRange) restoreSelPopupRange();
+        execCmd(btn.dataset.cmd);
+        refreshSelPopupActiveStates();
+      };
+    });
+    const submit = () => {
+      const q = input.value.trim();
+      if (!q) return;
+      restoreSelPopupRange();
+      $('#doc-ai-chat-input').value = q;
+      input.value = '';
+      hideSelPopup();
+      $('#doc-inspector').classList.remove('collapsed');
+      setTab('ai');
+      sendChat();
+    };
+    send.onclick = submit;
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); submit(); }
+      if (e.key === 'Escape') hideSelPopup();
+    };
+    selPopupEl = wrap;
+    return wrap;
+  }
+  function restoreSelPopupRange() {
+    if (!selPopupRange) return;
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(selPopupRange);
+  }
+  function refreshSelPopupActiveStates() {
+    if (!selPopupEl) return;
+    selPopupEl.querySelectorAll('[data-cmd]').forEach((btn) => {
+      let active = false;
+      try { active = document.queryCommandState(btn.dataset.cmd); } catch (_) {}
+      btn.classList.toggle('on', active);
+    });
+  }
+  function hideSelPopup() { if (selPopupEl) selPopupEl.hidden = true; selPopupRange = null; }
+  function showSelectionUI(range) {
+    selPopupRange = range.cloneRange();
+    const popup = ensureSelPopup();
+    refreshSelPopupActiveStates();
+    positionNearRange(popup, range, 'below');
+  }
+  function maybeShowSelectionUI() {
+    if (mode !== 'wysiwyg') return; // форматирование/AI-попап — только в режиме «Разметка»
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed && getActiveEditor().contains(sel.anchorNode) && sel.toString().trim()) {
+      showSelectionUI(sel.getRangeAt(0));
+    }
+  }
 
   // ---- Interface for Main ----
   function setDocOpen(open, opts = {}) {
@@ -763,6 +999,7 @@ export function initTextProc(host) {
     if (open) {
       setupUI();
       if (openTabs.length === 0) createNewTab();
+      else if (activeTabId === null) switchToTab(restoredActiveTabId != null ? restoredActiveTabId : openTabs[0].id);
     }
     setTimeout(refitActiveTerminal, 150);
   }
@@ -783,8 +1020,8 @@ export function initTextProc(host) {
 
   function toggleSidebar() {
     sidebar.classList.toggle('hidden');
-    if (!sidebar.classList.contains('hidden') && activeProj) {
-      renderTree(activeProj);
+    if (!sidebar.classList.contains('hidden') && getActiveProj()) {
+      renderTree(getActiveProj());
     }
   }
 
@@ -794,38 +1031,38 @@ export function initTextProc(host) {
   const btnCollapse = $('#btn-tree-collapse');
 
   if (btnNewFile) btnNewFile.onclick = () => {
-    if (!activeProj) return;
+    if (!getActiveProj()) return;
     host.showPrompt('Новый файл', 'Имя файла (без .md):', 'Новая заметка', async (val) => {
       if (!val) return;
       let name = val.trim();
       if (!name) return;
       if (!name.includes('.')) name += '.md';
       try {
-        await lite.fs.create(activeProj.path, name, false);
-        await renderTree(activeProj);
-        const sep = activeProj.path.includes('\\') ? '\\' : '/';
-        const newPath = activeProj.path.endsWith(sep) ? (activeProj.path + name) : (activeProj.path + sep + name);
+        await lite.fs.create(getActiveProj().path, name, false);
+        await renderTree(getActiveProj());
+        const sep = getActiveProj().path.includes('\\') ? '\\' : '/';
+        const newPath = getActiveProj().path.endsWith(sep) ? (getActiveProj().path + name) : (getActiveProj().path + sep + name);
         openProjectFile(newPath);
       } catch (err) { host.toast('Ошибка: ' + err.message, {kind:'err'}); }
     });
   };
 
   if (btnNewFolder) btnNewFolder.onclick = () => {
-    if (!activeProj) return;
+    if (!getActiveProj()) return;
     host.showPrompt('Новая папка', 'Имя папки:', 'Новая папка', async (val) => {
       if (!val) return;
       let name = val.trim();
       if (!name) return;
       try {
-        await lite.fs.create(activeProj.path, name, true);
-        await renderTree(activeProj);
+        await lite.fs.create(getActiveProj().path, name, true);
+        await renderTree(getActiveProj());
       } catch (err) { host.toast('Ошибка: ' + err.message, {kind:'err'}); }
     });
   };
 
   if (btnSort) btnSort.onclick = () => {
     treeSortMode = (treeSortMode === 'az') ? 'za' : 'az';
-    if (activeProj) renderTree(activeProj);
+    if (getActiveProj()) renderTree(getActiveProj());
   };
 
   if (btnCollapse) btnCollapse.onclick = () => {
@@ -836,13 +1073,53 @@ export function initTextProc(host) {
   };
 
   async function renderTree(proj) {
-    activeProj = proj;
+    
     loadRoles();
     if (sidebar.classList.contains('hidden')) return;
     if (!proj || !proj.path) return;
     try {
       treeContainer.innerHTML = '';
       
+      if (!settings.tpHiddenPaths) {
+        // Миграция со старого хранения по имени папки (settings.tpHiddenFolders) — переносим как есть,
+        // это лучше, чем молча забыть про то, что было скрыто раньше.
+        settings.tpHiddenPaths = Array.isArray(settings.tpHiddenFolders) ? settings.tpHiddenFolders.slice() : ['.obsidian'];
+        host.saveSettings();
+      }
+
+      const actionsContainer = $('.tp-sidebar-actions');
+      let btnHidden = $('#btn-tree-hidden');
+      if (!btnHidden && actionsContainer && host.iconBtn) {
+        btnHidden = host.iconBtn('tp-icon-btn sm', 'eye-off', '');
+        btnHidden.id = 'btn-tree-hidden';
+        btnHidden.onclick = () => {
+          settings.tpRevealHidden = !settings.tpRevealHidden;
+          host.saveSettings();
+          renderTree(getActiveProj());
+        };
+        actionsContainer.appendChild(btnHidden);
+      }
+      if (btnHidden) {
+        const revealing = !!settings.tpRevealHidden;
+        btnHidden.title = revealing ? 'Скрытые показаны притушёнными — нажмите, чтобы снова скрыть' : 'Показать скрытые файлы и папки';
+        btnHidden.classList.toggle('on', revealing);
+        btnHidden.innerHTML = '';
+        btnHidden.appendChild(icon(revealing ? 'eye' : 'eye-off', 16));
+      }
+
+      const relProjPath = (absPath) => {
+        if (!proj.path || !absPath.startsWith(proj.path)) return absPath;
+        return absPath.slice(proj.path.length).replace(/^[\\/]+/, '');
+      };
+      const isHiddenPath = (relPath) => (settings.tpHiddenPaths || []).includes(relPath);
+      const setHidden = (relPath, hidden) => {
+        if (!settings.tpHiddenPaths) settings.tpHiddenPaths = [];
+        settings.tpHiddenPaths = settings.tpHiddenPaths.filter((p) => p !== relPath);
+        if (hidden) settings.tpHiddenPaths.push(relPath);
+        host.saveSettings();
+        renderTree(getActiveProj());
+      };
+
       // Search functionality
     const searchInput = $('#doc-tree-search');
     if (searchInput) {
@@ -882,34 +1159,58 @@ export function initTextProc(host) {
           if (treeSortMode === 'za') return b.name.localeCompare(a.name);
           return a.name.localeCompare(b.name);
         });
-        const files = entries.filter(e => !e.dir && (e.name.endsWith('.md') || e.name.endsWith('.txt') || e.name.endsWith('.docx'))).sort((a,b) => {
+        const files = entries.filter(e => !e.dir && /\.(md|txt|docx?|pdf|html?|json|canvas|csv|png|jpe?g)$/i.test(e.name)).sort((a,b) => {
           if (treeSortMode === 'za') return b.name.localeCompare(a.name);
           return a.name.localeCompare(b.name);
         });
         
         for (const d of dirs) {
           if (d.name === 'Roles' || d.name === '.git' || d.name === 'node_modules') continue;
-          
+          const dRel = relProjPath(d.path);
+          const dHidden = isHiddenPath(dRel);
+          if (dHidden && !settings.tpRevealHidden) continue;
+
           const folderDiv = document.createElement('div');
-          folderDiv.className = 'tp-tree-folder';
-          
+          folderDiv.className = 'tp-tree-folder' + (dHidden ? ' tp-tree-hidden-item' : '');
+
           const header = document.createElement('div');
           header.className = 'tp-tree-folder-header';
-          
+
           const icon = document.createElement('span');
           icon.className = 'tp-tree-icon';
           icon.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><polyline points="9 18 15 12 9 6"></polyline></svg>`; // chevron-right
-          
+
           const label = document.createElement('span');
+          label.className = 'tp-tree-item-name';
           label.textContent = d.name;
-          
+
           header.appendChild(icon);
           const folderIcon = document.createElement('span');
           folderIcon.className = 'tp-folder-glyph';
           folderIcon.innerHTML = `<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>`;
           header.appendChild(folderIcon);
           header.appendChild(label);
+          if (dHidden) {
+            const unhideBtn = host.iconBtn('tp-tree-unhide-btn', 'eye-off', 'Показать папку');
+            unhideBtn.onclick = (e) => { e.stopPropagation(); setHidden(dRel, false); };
+            header.appendChild(unhideBtn);
+          }
           folderDiv.appendChild(header);
+
+          header.oncontextmenu = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (host.closeMenus && host.menuRow && host.placeMenu) {
+              host.closeMenus();
+              const dd = document.createElement('div');
+              dd.className = 'menu-dropdown';
+              dd.appendChild(host.menuRow('eye-off', dHidden ? 'Показать папку' : 'Скрыть папку', () => {
+                host.closeMenus();
+                setHidden(dRel, !dHidden);
+              }));
+              host.placeMenu(dd, e.clientX, e.clientY);
+            }
+          };
           
           const childrenContainer = document.createElement('div');
           childrenContainer.className = 'tp-tree-folder-children';
@@ -938,25 +1239,49 @@ export function initTextProc(host) {
         }
         
         for (const f of files) {
+          const fRel = relProjPath(f.path);
+          const fHidden = isHiddenPath(fRel);
+          if (fHidden && !settings.tpRevealHidden) continue;
+
           const item = document.createElement('div');
-          item.className = 'tp-tree-item';
-          
+          item.className = 'tp-tree-item' + (fHidden ? ' tp-tree-hidden-item' : '');
+
           item.appendChild(fileBadge(f.name));
-          
+
           const nameSpan = document.createElement('span');
           nameSpan.className = 'tp-tree-item-name';
           nameSpan.textContent = f.name;
           item.appendChild(nameSpan);
-          
+
+          if (fHidden) {
+            const unhideBtn = host.iconBtn('tp-tree-unhide-btn', 'eye-off', 'Показать файл');
+            unhideBtn.onclick = (e) => { e.stopPropagation(); setHidden(fRel, false); };
+            item.appendChild(unhideBtn);
+          }
+
           if (activeTab && f.path === activeTab.path) {
             item.classList.add('active');
           }
-          
+
           item.onclick = (e) => {
             e.stopPropagation();
             document.querySelectorAll('.tp-tree-item.active').forEach(el => el.classList.remove('active'));
             item.classList.add('active');
             openProjectFile(f.path);
+          };
+          item.oncontextmenu = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (host.closeMenus && host.menuRow && host.placeMenu) {
+              host.closeMenus();
+              const dd = document.createElement('div');
+              dd.className = 'menu-dropdown';
+              dd.appendChild(host.menuRow('eye-off', fHidden ? 'Показать файл' : 'Скрыть файл', () => {
+                host.closeMenus();
+                setHidden(fRel, !fHidden);
+              }));
+              host.placeMenu(dd, e.clientX, e.clientY);
+            }
           };
           container.appendChild(item);
           hasFiles = true;
@@ -967,13 +1292,81 @@ export function initTextProc(host) {
         }
       };
       
+      await renderPromptsSection(treeContainer, proj);
       await buildTree(proj.path, treeContainer, 0);
     } catch (e) {
       console.error(e);
     }
   }
 
-  async function openProjectFile(absPath) {
+  // Закреплённый раздел вверху дерева — прямой доступ к файлам ролей (Roles/), которые сам
+  // buildTree() всегда пропускает (см. `d.name === 'Roles'` выше). Не участвует в скрытии.
+  async function loadPromptsList(container, proj) {
+    container.innerHTML = '';
+    try {
+      const entries = await lite.fs.readDir(`${proj.path}/Roles`);
+      const files = (entries || []).filter((e) => !e.dir && /\.md$/i.test(e.name))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      if (!files.length) {
+        container.innerHTML = '<div style="padding:4px 14px;color:var(--tp-text-3);font-size:12.5px;">Нет промтов</div>';
+        return;
+      }
+      files.forEach((f) => {
+        const item = document.createElement('div');
+        item.className = 'tp-tree-item';
+        item.appendChild(fileBadge(f.name));
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'tp-tree-item-name';
+        nameSpan.textContent = f.name;
+        item.appendChild(nameSpan);
+        item.onclick = (e) => { e.stopPropagation(); openProjectFile(f.path); };
+        container.appendChild(item);
+      });
+    } catch (_) {
+      container.innerHTML = '';
+    }
+  }
+  async function renderPromptsSection(container, proj) {
+    const wrap = document.createElement('div');
+    wrap.className = 'tp-tree-folder tp-tree-pinned';
+
+    const header = document.createElement('div');
+    header.className = 'tp-tree-folder-header';
+    const chevron = document.createElement('span');
+    chevron.className = 'tp-tree-icon';
+    chevron.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><polyline points="9 18 15 12 9 6"></polyline></svg>`;
+    const glyph = document.createElement('span');
+    glyph.className = 'tp-folder-glyph';
+    glyph.appendChild(icon('sparkles', 15));
+    const label = document.createElement('span');
+    label.className = 'tp-tree-item-name';
+    label.textContent = 'Промты';
+    header.append(chevron, glyph, label);
+    wrap.appendChild(header);
+
+    const childrenContainer = document.createElement('div');
+    childrenContainer.className = 'tp-tree-folder-children';
+    childrenContainer.style.display = 'none';
+    wrap.appendChild(childrenContainer);
+
+    let loaded = false;
+    header.onclick = async (e) => {
+      e.stopPropagation();
+      const collapsed = childrenContainer.style.display === 'none';
+      if (collapsed) {
+        childrenContainer.style.display = 'block';
+        chevron.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
+        if (!loaded) { await loadPromptsList(childrenContainer, proj); loaded = true; }
+      } else {
+        childrenContainer.style.display = 'none';
+        chevron.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><polyline points="9 18 15 12 9 6"></polyline></svg>`;
+      }
+    };
+    container.appendChild(wrap);
+    container.appendChild(el('div', 'tp-tree-pinned-sep'));
+  }
+
+  async function openProjectFile(absPath, fileContent = null) {
     // Check if already open
     let tab = openTabs.find(t => t.absPath === absPath);
     if (tab) {
@@ -981,24 +1374,39 @@ export function initTextProc(host) {
       return;
     }
     
-    // Read file
-    const r = await lite.fs.readFile(absPath);
-    if (!r || r.error) {
-      toast('Ошибка чтения файла', { kind: 'err' });
-      return;
+    let content = fileContent;
+    if (content === null) {
+      // Read file
+      const r = await lite.fs.readFile(absPath);
+      if (!r || r.error) {
+        toast('Ошибка чтения файла', { kind: 'err' });
+        return;
+      }
+      content = r.content;
     }
     
     // Create new tab
     const id = nextTabId++;
-    const name = lite.path.basename(absPath);
+    const name = absPath.split(/[\\/]/).pop();
     const isHtml = /\.html?$/i.test(name);
+    
+    let htmlText = '', mdText = '';
+    if (isHtml) {
+      htmlText = content;
+      const div = document.createElement('div');
+      div.innerHTML = content;
+      mdText = htmlToMd(div);
+    } else {
+      htmlText = mdToHtml(content);
+      mdText = content;
+    }
     
     tab = {
       id,
       absPath,
       name,
-      html: isHtml ? r.content : mdToHtml(r.content),
-      md: isHtml ? htmlToMd(r.content) : r.content,
+      html: htmlText,
+      md: mdText,
       mode: 'wysiwyg',
       dirty: false
     };
@@ -1033,6 +1441,8 @@ export function initTextProc(host) {
     addBtn.textContent = '+';
     addBtn.onclick = () => createNewTab();
     tabsContainer.appendChild(addBtn);
+
+    persistTabs();
   }
   
   function createNewTab() {
@@ -1074,13 +1484,13 @@ export function initTextProc(host) {
     currentName = tab.name;
     mode = tab.mode;
     dirty = tab.dirty;
-    
+
     // Load content without resetting mode
     $('#doc-editor-wysiwyg').innerHTML = tab.html;
     $('#doc-editor-md').textContent = tab.md;
     updateModeUI();
     updateStatus(dirty ? 'Изменено' : (tab.absPath ? 'Открыт' : 'Новый файл'));
-    
+
     renderTabsUI();
   }
 
@@ -1109,7 +1519,7 @@ export function initTextProc(host) {
   }
 
   function onFsChange(proj, files) {
-    if (activeProj && activeProj.path === proj.path) {
+    if (getActiveProj() && getActiveProj().path === proj.path) {
       renderTree(proj);
     }
   }

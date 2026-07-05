@@ -149,6 +149,7 @@ export const ICONS = {
   'obs-new-folder': '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><path d="M12 11v6"/><path d="M9 14h6"/>',
   'obs-sort': '<path d="M6 3v18"/><path d="M3 6l3-3 3 3"/><path d="M12 6h8"/><path d="M12 12h6"/><path d="M12 18h4"/>',
   'obs-collapse': '<rect x="5" y="8" width="14" height="8" rx="1.5"/><path d="M5 4h14M5 20h14"/>',
+  hash: '<path d="M5 9h14M5 15h14M10 4L7 20M17 4l-3 16"/>',
 };
 export function icon(name, size = 16) {
   return svgEl(`<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`);

@@ -39,7 +39,14 @@ const $ = (sel) => document.querySelector(sel);
 // ---------------------------------------------------------------- global store (~/.LiteEditor)
 // Synchronous snapshot loaded once; reads are in-memory, writes go through to disk.
 const STORE = lite.store.loadAll();
-function persist(key, value) { STORE[key] = value; lite.store.set(key, value); }
+function persist(key, value, sync = false) { 
+  STORE[key] = value; 
+  if (sync) {
+    try { lite.store.setSync(key, value); } catch (_) { lite.store.set(key, value); }
+  } else {
+    lite.store.set(key, value); 
+  }
+}
 // One-time import from the old localStorage layout (builds before ~/.LiteEditor).
 (function migrateLocalStorage() {
   if (STORE.projects !== undefined) return;
@@ -899,7 +906,7 @@ function saveProjTabs() {
   for (const [pid, t] of tabsByProj) {
     out[pid] = { names: t.sessions.map((s) => (terms.get(s) || {}).name || 'Терминал'), active: t.sessions.indexOf(t.active) };
   }
-  persist('projTabs', out);
+  persist('projTabs', out, true);
 }
 
 // ── Снимки сессий между перезапусками (идея 7) ────────────────────────────────

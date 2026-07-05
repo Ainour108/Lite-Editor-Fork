@@ -97,11 +97,9 @@
           </div>
           
           <div class="tp-shell">
-            <div id="doc-tabs-container" class="tp-tabs-container"></div>
-            
-            <!-- toolbar: undo/redo, открыть/сохранить, имя+статус, режим, панели -->
-            <div class="tp-toolbar">
-              <button id="doc-toggle-sidebar" class="tp-icon-btn" title="Развернуть" data-icon="columns" style="margin-right: 8px;"></button>
+            <!-- единая тулбар-лента: тулбар + бывшая плавающая пилюля форматирования, слиты в одну ленту -->
+            <div class="tp-toolbar tp-toolbar-merged">
+              <button id="doc-toggle-sidebar" class="tp-icon-btn" title="Развернуть" data-icon="columns"></button>
               <div class="tp-tb-group">
               <button id="doc-undo-btn" class="tp-icon-btn" title="Отменить" data-icon="undo"></button>
               <button id="doc-redo-btn" class="tp-icon-btn" title="Повторить" data-icon="redo"></button>
@@ -109,21 +107,7 @@
             <span class="tp-sep"></span>
             <button id="doc-open-btn" class="tp-btn"><span data-icon="folder"></span>Открыть</button>
             <button id="doc-save-btn" class="tp-btn"><span data-icon="save"></span>Сохранить</button>
-            <div class="tp-doc-name-wrap">
-              <span id="doc-name-label" class="tp-doc-name">Безымянный</span>
-              <span id="doc-status-label" class="tp-doc-status">Новый файл</span>
-            </div>
-            <div id="doc-mode-toggle" class="tp-segment">
-              <span class="tp-seg-thumb"></span>
-              <button data-mode="wysiwyg" class="tp-seg-btn active">Разметка</button>
-              <button data-mode="markdown" class="tp-seg-btn">Markdown</button>
-            </div>
-            <button id="doc-toggle-inspector" class="tp-btn tp-btn-accent"><span data-icon="panels"></span>Панели</button>
-          </div>
-
-          <!-- floating format pill -->
-          <div id="doc-format-pill" class="tp-pill">
-            <!-- Custom Glassmorphic Dropdowns -->
+            <span class="tp-sep"></span>
             <div class="tp-dropdown" id="doc-zoom-dd">
               <button class="tp-dd-btn" title="Масштаб"><span>100%</span> <span data-icon="chevron-down"></span></button>
               <div class="tp-dd-menu" hidden>
@@ -133,7 +117,6 @@
                 <button class="tp-dd-item" data-val="1.5">150%</button>
               </div>
             </div>
-            <span class="tp-pill-sep"></span>
             <div class="tp-dropdown" id="doc-lineheight-dd">
               <button class="tp-dd-btn" title="Интервал"><span data-icon="list"></span> <span data-icon="chevron-down"></span></button>
               <div class="tp-dd-menu" hidden>
@@ -144,7 +127,6 @@
                 <button class="tp-dd-item" data-val="2.0">2.0</button>
               </div>
             </div>
-            <span class="tp-pill-sep"></span>
             <div class="tp-dropdown" id="doc-format-dd" data-cmd="formatBlock">
               <button class="tp-dd-btn"><span>Обычный</span> <span data-icon="chevron-down"></span></button>
               <div class="tp-dd-menu" hidden>
@@ -168,15 +150,36 @@
             <span class="tp-pill-sep"></span>
             <button data-cmd="toggleColumns" class="tp-pill-btn" title="Две колонки" data-icon="columns-2"></button>
             <button data-cmd="insertTable" class="tp-pill-btn" title="Вставить таблицу" data-icon="table-insert"></button>
+            <button id="doc-toggle-numbering" class="tp-pill-btn" title="Номера абзацев (для ссылок в AI-чате)" data-icon="hash"></button>
+            <span class="tp-sep"></span>
+            <div class="tp-doc-name-wrap">
+              <span id="doc-name-label" class="tp-doc-name">Безымянный</span>
+              <span id="doc-status-label" class="tp-doc-status">Новый файл</span>
+            </div>
+            <div class="tp-tb-spacer"></div>
+            <div id="doc-mode-toggle" class="tp-segment">
+              <span class="tp-seg-thumb"></span>
+              <button data-mode="wysiwyg" class="tp-seg-btn active">Разметка</button>
+              <button data-mode="markdown" class="tp-seg-btn">Markdown</button>
+            </div>
+            <button id="doc-toggle-inspector" class="tp-btn tp-btn-accent"><span data-icon="panels"></span>Панели</button>
           </div>
 
           <!-- workspace -->
           <div class="tp-workspace">
             <div class="tp-canvas">
-              <div class="tp-page">
-                <div id="doc-editor-wysiwyg" class="tp-doc" contenteditable="true" spellcheck="false"></div>
-                <div id="doc-editor-md" class="tp-doc tp-doc-md" contenteditable="true" spellcheck="false" hidden></div>
+              <div class="tp-page-wrap">
+                <div id="doc-tabs-container" class="tp-tabs-container"></div>
+                <div class="tp-page">
+                  <div id="doc-editor-wysiwyg" class="tp-doc" contenteditable="true" spellcheck="false"></div>
+                  <div id="doc-editor-md" class="tp-doc tp-doc-md" contenteditable="true" spellcheck="false" hidden></div>
+                </div>
               </div>
+            </div>
+
+            <!-- рейка-навигатор: метки заголовков + бегунок текущей позиции, рядом с обычным скроллом -->
+            <div id="doc-scrubber" class="tp-scrubber">
+              <div id="doc-scrubber-track" class="tp-scrubber-track"></div>
             </div>
 
             <!-- inspector: two tabs -->
