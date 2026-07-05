@@ -3103,12 +3103,12 @@ body.preview-full .prev-frame { width: 100%; height: 100%; }
   flex-shrink: 0; /* .tp-canvas — flex-колонка со scroll; без этого длинный документ сжимает
                      .tp-page до min-height, и текст вываливается за карточку на фон стола */
 }
-.tp-page-wrap .tp-page { border-top-left-radius: 0; border-top-right-radius: 0; }
+.tp-page-wrap .tp-page { border-top-left-radius: 0; border-top-right-radius: 14px; }
 .tp-doc { min-height: 800px; display: block; outline: none; color: var(--tp-text); }
 .tp-doc[hidden], .tp-panel-edit[hidden], .tp-panel-ai[hidden] { display: none !important; }
 
 /* ---- рейка-навигатор: метки заголовков + текущая позиция, рядом с обычным скроллом .tp-canvas ---- */
-.tp-scrubber { width: 14px; flex: none; position: relative; margin: 30px 2px 40px 0; }
+.tp-scrubber { width: 14px; flex: none; position: relative; margin: 6px 2px 40px 0; }
 .tp-scrubber-track { position: relative; width: 4px; height: 100%; margin: 0 auto; border-radius: 3px; background: var(--tp-border-soft); cursor: pointer; }
 .tp-scrubber-tick {
   position: absolute; left: 50%; transform: translate(-50%, -50%); width: 8px; height: 8px; border-radius: 50%;

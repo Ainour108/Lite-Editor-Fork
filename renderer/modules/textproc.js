@@ -537,7 +537,11 @@ export function initTextProc(host) {
       const diff = Math.abs(tr * r.height - ratio * r.height);
       if (diff < 10 && diff < minDiff) { minDiff = diff; snapRatio = tr; }
     });
-    ratio = snapRatio;
+    
+    // Отключаем магнит на самых краях, чтобы можно было долистать до верха/низа
+    if (ratio * r.height < 10) ratio = 0;
+    else if (ratio * r.height > r.height - 10) ratio = 1;
+    else ratio = snapRatio;
 
     canvas.scrollTop = ratio * (canvas.scrollHeight - canvas.clientHeight);
   }
