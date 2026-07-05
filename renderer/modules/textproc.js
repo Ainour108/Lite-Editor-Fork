@@ -891,8 +891,14 @@ export function initTextProc(host) {
     const sel = window.getSelection();
     const hasSel = sel && !sel.isCollapsed && sel.toString().trim();
     if (ctxText) {
-      if (hasSel) { const text = sel.toString(); ctxText.textContent = text.slice(0, 100) + (text.length > 100 ? '…' : ''); ctxText.classList.add('filled'); }
-      else { ctxText.textContent = 'Выделите фрагмент в документе — он попадёт сюда. Ответ можно вставить кнопкой «Заменить».'; ctxText.classList.remove('filled'); }
+      if (hasSel) { 
+        const text = sel.toString(); 
+        ctxText.textContent = text.slice(0, 100) + (text.length > 100 ? '…' : ''); 
+        ctxText.classList.add('filled'); 
+      } else if (document.activeElement && document.activeElement.id !== 'doc-ai-chat-input') {
+        ctxText.textContent = 'Выделите фрагмент в документе — он попадёт сюда. Ответ можно вставить кнопкой «Заменить».'; 
+        ctxText.classList.remove('filled'); 
+      }
     }
     if (!hasSel) hideSelPopup();
   });
@@ -918,66 +924,72 @@ export function initTextProc(host) {
     node.style.top = y + 'px';
   }
   function ensureSelPopup() {
-    if (selPopupFmtEl) return { fmt: selPopupFmtEl, ai: selPopupAiEl };
-    
-    const fmtWrap = el('div', 'tp-sel-popup tp-sel-popup-fmt-wrap');
-    const fmtRow = el('div', 'tp-sel-popup-fmt');
-    [['bold', 'Жирный'], ['italic', 'Курсив'], ['underline', 'Подчёркнутый']].forEach(([cmd, title]) => {
-      const btn = host.iconBtn('tp-pill-btn', cmd, title);
-      btn.dataset.cmd = cmd;
-      fmtRow.appendChild(btn);
-    });
-    fmtRow.appendChild(el('span', 'tp-pill-sep'));
-    const listBtn = host.iconBtn('tp-pill-btn', 'list', 'Список');
-    listBtn.dataset.cmd = 'insertUnorderedList';
-    fmtRow.appendChild(listBtn);
-    fmtWrap.appendChild(fmtRow);
+    let fmtWrap = selPopupFmtEl;
+    let aiWrap = selPopupAiEl;
 
-    const aiWrap = el('div', 'tp-sel-popup tp-sel-popup-ai-wrap');
-    const row = el('div', 'tp-sel-popup-row');
-    row.appendChild(el('span', 'tp-sel-popup-arrow', '↳'));
-    const input = document.createElement('input');
-    input.type = 'text'; input.className = 'tp-sel-popup-input'; input.placeholder = 'Задать вопрос по теме…';
-    row.appendChild(input);
-    const send = host.iconBtn('tp-sel-popup-send', 'send', 'Отправить');
-    row.appendChild(send);
-    aiWrap.appendChild(row);
+    if (!fmtWrap) {
+      fmtWrap = el('div', 'tp-sel-popup tp-sel-popup-fmt-wrap');
+      const fmtRow = el('div', 'tp-sel-popup-fmt');
+      [['bold', 'Жирный'], ['italic', 'Курсив'], ['underline', 'Подчёркнутый']].forEach(([cmd, title]) => {
+        const btn = host.iconBtn('tp-pill-btn', cmd, title);
+        btn.dataset.cmd = cmd;
+        fmtRow.appendChild(btn);
+      });
+      fmtRow.appendChild(el('span', 'tp-pill-sep'));
+      const listBtn = host.iconBtn('tp-pill-btn', 'list', 'Список');
+      listBtn.dataset.cmd = 'insertUnorderedList';
+      fmtRow.appendChild(listBtn);
+      fmtWrap.appendChild(fmtRow);
+
+      aiWrap = el('div', 'tp-sel-popup tp-sel-popup-ai-wrap');
+      const row = el('div', 'tp-sel-popup-row');
+      row.appendChild(el('span', 'tp-sel-popup-arrow', '↳'));
+      const input = document.createElement('input');
+      input.type = 'text'; input.className = 'tp-sel-popup-input'; input.placeholder = 'Задать вопрос по теме…';
+      row.appendChild(input);
+      const send = host.iconBtn('tp-sel-popup-send', 'send', 'Отправить');
+      row.appendChild(send);
+      aiWrap.appendChild(row);
+
+      fmtWrap.style.display = 'none';
+      aiWrap.style.display = 'none';
+      fmtWrap.onmousedown = (e) => e.stopPropagation();
+      aiWrap.onmousedown = (e) => e.stopPropagation();
+
+      fmtWrap.querySelectorAll('[data-cmd]').forEach((btn) => {
+        btn.onmousedown = (e) => e.preventDefault();
+        btn.onclick = (e) => {
+          e.preventDefault();
+          if (selPopupRange) restoreSelPopupRange();
+          execCmd(btn.dataset.cmd);
+          refreshSelPopupActiveStates();
+        };
+      });
+      const submit = () => {
+        const q = input.value.trim();
+        if (!q) return;
+        restoreSelPopupRange();
+        $('#doc-ai-chat-input').value = q;
+        input.value = '';
+        hideSelPopup();
+        $('#doc-inspector').classList.remove('collapsed');
+        setTab('ai');
+        sendChat();
+      };
+      send.onclick = submit;
+      input.onkeydown = (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); submit(); }
+        if (e.key === 'Escape') hideSelPopup();
+      };
+      
+      selPopupFmtEl = fmtWrap;
+      selPopupAiEl = aiWrap;
+    }
 
     const layer = document.getElementById('menu-layer') || document.body;
-    layer.appendChild(fmtWrap);
-    layer.appendChild(aiWrap);
-    fmtWrap.style.display = 'none';
-    aiWrap.style.display = 'none';
-    fmtWrap.onmousedown = (e) => e.stopPropagation();
-    aiWrap.onmousedown = (e) => e.stopPropagation();
+    if (fmtWrap.parentNode !== layer) layer.appendChild(fmtWrap);
+    if (aiWrap.parentNode !== layer) layer.appendChild(aiWrap);
 
-    fmtWrap.querySelectorAll('[data-cmd]').forEach((btn) => {
-      btn.onmousedown = (e) => e.preventDefault();
-      btn.onclick = (e) => {
-        e.preventDefault();
-        if (selPopupRange) restoreSelPopupRange();
-        execCmd(btn.dataset.cmd);
-        refreshSelPopupActiveStates();
-      };
-    });
-    const submit = () => {
-      const q = input.value.trim();
-      if (!q) return;
-      restoreSelPopupRange();
-      $('#doc-ai-chat-input').value = q;
-      input.value = '';
-      hideSelPopup();
-      $('#doc-inspector').classList.remove('collapsed');
-      setTab('ai');
-      sendChat();
-    };
-    send.onclick = submit;
-    input.onkeydown = (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); submit(); }
-      if (e.key === 'Escape') hideSelPopup();
-    };
-    selPopupFmtEl = fmtWrap;
-    selPopupAiEl = aiWrap;
     return { fmt: fmtWrap, ai: aiWrap };
   }
   function restoreSelPopupRange() {
