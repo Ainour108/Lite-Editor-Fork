@@ -261,14 +261,8 @@ export function initTextProc(host) {
       updateNumberingUI();
     }
     const wysiwygEl = $('#doc-editor-wysiwyg');
-    wysiwygEl.addEventListener('mouseup', maybeShowSelectionUI);
-    wysiwygEl.addEventListener('dblclick', () => setTimeout(maybeShowSelectionUI, 0));
-    
-    const srcEl = $('#doc-editor-src');
-    if (srcEl) {
-      srcEl.addEventListener('mouseup', maybeShowSelectionUI);
-      srcEl.addEventListener('dblclick', () => setTimeout(maybeShowSelectionUI, 0));
-    }
+    document.addEventListener('mouseup', () => setTimeout(maybeShowSelectionUI, 10));
+    document.addEventListener('dblclick', () => setTimeout(maybeShowSelectionUI, 10));
 
     $$('[data-cmd]').forEach((node) => {
       if (node.classList.contains('tp-dropdown')) return;
@@ -992,9 +986,15 @@ export function initTextProc(host) {
       selPopupAiEl = aiWrap;
     }
 
-    const layer = document.getElementById('menu-layer') || document.body;
-    if (fmtWrap.parentNode !== layer) layer.appendChild(fmtWrap);
-    if (aiWrap.parentNode !== layer) layer.appendChild(aiWrap);
+    const layer = document.body;
+    if (fmtWrap.parentNode !== layer) {
+      layer.appendChild(fmtWrap);
+      fmtWrap.style.zIndex = '99999';
+    }
+    if (aiWrap.parentNode !== layer) {
+      layer.appendChild(aiWrap);
+      aiWrap.style.zIndex = '99999';
+    }
 
     return { fmt: fmtWrap, ai: aiWrap };
   }
