@@ -527,7 +527,18 @@ export function initTextProc(host) {
     const canvas = document.querySelector('.tp-canvas');
     if (!track || !canvas) return;
     const r = track.getBoundingClientRect();
-    const ratio = Math.max(0, Math.min(1, (e.clientY - r.top) / r.height));
+    let ratio = Math.max(0, Math.min(1, (e.clientY - r.top) / r.height));
+    
+    const ticks = track.querySelectorAll('.tp-scrubber-tick');
+    let snapRatio = ratio;
+    let minDiff = Infinity;
+    ticks.forEach(tick => {
+      const tr = parseFloat(tick.style.top) / 100;
+      const diff = Math.abs(tr * r.height - ratio * r.height);
+      if (diff < 10 && diff < minDiff) { minDiff = diff; snapRatio = tr; }
+    });
+    ratio = snapRatio;
+
     canvas.scrollTop = ratio * (canvas.scrollHeight - canvas.clientHeight);
   }
   function scheduleScrubberUpdate() {
@@ -885,7 +896,8 @@ export function initTextProc(host) {
   // ---- Плавающий попап при выделении: панель форматирования + мини-вопрос к AI ----
   // Переиспользует execCmd()/sendChat()/selForChat() как есть — только показывает/позиционирует
   // готовый UI поверх существующего pipeline, ничего в нём не дублирует.
-  let selPopupEl = null;
+  let selPopupFmtEl = null;
+  let selPopupAiEl = null;
   let selPopupRange = null; // сохранённый Range — фокус на инпуте попапа может сбить window.getSelection()
 
   // Реплика паттерна placeMenu() из renderer.js (другой bundle, недоступен отсюда напрямую):
@@ -902,8 +914,9 @@ export function initTextProc(host) {
     node.style.top = y + 'px';
   }
   function ensureSelPopup() {
-    if (selPopupEl) return selPopupEl;
-    const wrap = el('div', 'tp-sel-popup');
+    if (selPopupFmtEl) return { fmt: selPopupFmtEl, ai: selPopupAiEl };
+    
+    const fmtWrap = el('div', 'tp-sel-popup tp-sel-popup-fmt-wrap');
     const fmtRow = el('div', 'tp-sel-popup-fmt');
     [['bold', 'Жирный'], ['italic', 'Курсив'], ['underline', 'Подчёркнутый']].forEach(([cmd, title]) => {
       const btn = host.iconBtn('tp-pill-btn', cmd, title);
@@ -914,7 +927,9 @@ export function initTextProc(host) {
     const listBtn = host.iconBtn('tp-pill-btn', 'list', 'Список');
     listBtn.dataset.cmd = 'insertUnorderedList';
     fmtRow.appendChild(listBtn);
+    fmtWrap.appendChild(fmtRow);
 
+    const aiWrap = el('div', 'tp-sel-popup tp-sel-popup-ai-wrap');
     const row = el('div', 'tp-sel-popup-row');
     row.appendChild(el('span', 'tp-sel-popup-arrow', '↳'));
     const input = document.createElement('input');
@@ -922,15 +937,16 @@ export function initTextProc(host) {
     row.appendChild(input);
     const send = host.iconBtn('tp-sel-popup-send', 'send', 'Отправить');
     row.appendChild(send);
+    aiWrap.appendChild(row);
 
-    wrap.appendChild(fmtRow);
-    wrap.appendChild(row);
-    document.getElementById('menu-layer').appendChild(wrap);
-    wrap.hidden = true;
-    wrap.onmousedown = (e) => e.stopPropagation(); // не терять выделение кликом по попапу
+    document.getElementById('menu-layer').appendChild(fmtWrap);
+    document.getElementById('menu-layer').appendChild(aiWrap);
+    fmtWrap.hidden = true; aiWrap.hidden = true;
+    fmtWrap.onmousedown = (e) => e.stopPropagation();
+    aiWrap.onmousedown = (e) => e.stopPropagation();
 
-    wrap.querySelectorAll('[data-cmd]').forEach((btn) => {
-      btn.onmousedown = (e) => e.preventDefault(); // не терять выделение на mousedown (как у .tp-pill)
+    fmtWrap.querySelectorAll('[data-cmd]').forEach((btn) => {
+      btn.onmousedown = (e) => e.preventDefault();
       btn.onclick = (e) => {
         e.preventDefault();
         if (selPopupRange) restoreSelPopupRange();
@@ -954,8 +970,9 @@ export function initTextProc(host) {
       if (e.key === 'Enter') { e.preventDefault(); submit(); }
       if (e.key === 'Escape') hideSelPopup();
     };
-    selPopupEl = wrap;
-    return wrap;
+    selPopupFmtEl = fmtWrap;
+    selPopupAiEl = aiWrap;
+    return { fmt: fmtWrap, ai: aiWrap };
   }
   function restoreSelPopupRange() {
     if (!selPopupRange) return;
@@ -964,19 +981,24 @@ export function initTextProc(host) {
     sel.addRange(selPopupRange);
   }
   function refreshSelPopupActiveStates() {
-    if (!selPopupEl) return;
-    selPopupEl.querySelectorAll('[data-cmd]').forEach((btn) => {
+    if (!selPopupFmtEl) return;
+    selPopupFmtEl.querySelectorAll('[data-cmd]').forEach((btn) => {
       let active = false;
       try { active = document.queryCommandState(btn.dataset.cmd); } catch (_) {}
       btn.classList.toggle('on', active);
     });
   }
-  function hideSelPopup() { if (selPopupEl) selPopupEl.hidden = true; selPopupRange = null; }
+  function hideSelPopup() {
+    if (selPopupFmtEl) selPopupFmtEl.hidden = true;
+    if (selPopupAiEl) selPopupAiEl.hidden = true;
+    selPopupRange = null;
+  }
   function showSelectionUI(range) {
     selPopupRange = range.cloneRange();
-    const popup = ensureSelPopup();
+    const popups = ensureSelPopup();
     refreshSelPopupActiveStates();
-    positionNearRange(popup, range, 'below');
+    positionNearRange(popups.fmt, range, 'above');
+    positionNearRange(popups.ai, range, 'below');
   }
   function maybeShowSelectionUI() {
     if (mode !== 'wysiwyg') return; // форматирование/AI-попап — только в режиме «Разметка»

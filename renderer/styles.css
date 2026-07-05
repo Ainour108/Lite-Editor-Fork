@@ -3025,9 +3025,9 @@ body.preview-full .prev-frame { width: 100%; height: 100%; }
 .tp-btn-block { width: 100%; justify-content: center; }
 /* компактный статус сохранения — имя файла и так видно на вкладке над страницей, поэтому здесь
    только текст статуса ("Сохранено · 14:32" и т.п.), без центрирования по всей ленте */
-.tp-doc-name-wrap { flex: none; display: flex; flex-direction: column; justify-content: center; line-height: 1.15; min-width: 0; max-width: 160px; }
+.tp-doc-name-wrap { display: none; }
 .tp-doc-name { display: none; }
-.tp-doc-status { font-size: 10.5px; color: var(--tp-text-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tp-doc-status { display: none; }
 .tp-segment { position: relative; display: flex; padding: 3px; background: var(--tp-segment-bg); border-radius: 11px; gap: 2px; isolation: isolate; }
 .tp-segment.sm { padding: 2px; border-radius: 9px; gap: 2px; }
 .tp-seg-thumb {
@@ -3073,7 +3073,7 @@ body.preview-full .prev-frame { width: 100%; height: 100%; }
   animation: tp-pop-in .12s ease-out;
 }
 .tp-sel-popup[hidden] { display: none !important; }
-.tp-sel-popup-fmt { display: flex; align-items: center; gap: 2px; padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid var(--tp-border-soft); }
+.tp-sel-popup-fmt { display: flex; align-items: center; gap: 2px; }
 .tp-sel-popup-row { display: flex; align-items: center; gap: 6px; width: 260px; }
 .tp-sel-popup-arrow { color: var(--tp-text-mute); flex: none; font-size: 13px; }
 .tp-sel-popup-input { flex: 1; min-width: 0; border: none; background: transparent; outline: none; font: inherit; font-size: 12.5px; color: var(--tp-text); }
@@ -3109,7 +3109,7 @@ body.preview-full .prev-frame { width: 100%; height: 100%; }
 
 /* ---- рейка-навигатор: метки заголовков + текущая позиция, рядом с обычным скроллом .tp-canvas ---- */
 .tp-scrubber { width: 14px; flex: none; position: relative; margin: 6px 2px 40px 0; }
-.tp-scrubber-track { position: relative; width: 4px; height: 100%; margin: 0 auto; border-radius: 3px; background: var(--tp-border-soft); cursor: pointer; }
+.tp-scrubber-track { position: relative; width: 2px; height: 100%; margin: 0 auto; border-radius: 3px; background: var(--tp-border-soft); cursor: pointer; }
 .tp-scrubber-tick {
   position: absolute; left: 50%; transform: translate(-50%, -50%); width: 8px; height: 8px; border-radius: 50%;
   background: var(--tp-glass-border-strong); border: 1px solid rgba(255,255,255,0.8); cursor: pointer;
