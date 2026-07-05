@@ -889,7 +889,7 @@ export function initTextProc(host) {
     if (!docOpen) return;
     const ctxText = $('#doc-ai-ctx-text');
     const sel = window.getSelection();
-    const hasSel = sel && !sel.isCollapsed && getActiveEditor().contains(sel.anchorNode) && sel.toString().trim();
+    const hasSel = sel && !sel.isCollapsed && sel.toString().trim();
     if (ctxText) {
       if (hasSel) { const text = sel.toString(); ctxText.textContent = text.slice(0, 100) + (text.length > 100 ? '…' : ''); ctxText.classList.add('filled'); }
       else { ctxText.textContent = 'Выделите фрагмент в документе — он попадёт сюда. Ответ можно вставить кнопкой «Заменить».'; ctxText.classList.remove('filled'); }
@@ -1014,7 +1014,7 @@ export function initTextProc(host) {
     if (mode !== 'wysiwyg') return;
     try {
       const sel = window.getSelection();
-      if (sel && !sel.isCollapsed && getActiveEditor().contains(sel.anchorNode) && sel.toString().trim()) {
+      if (sel && !sel.isCollapsed && sel.toString().trim()) {
         showSelectionUI(sel.getRangeAt(0));
       }
     } catch (e) { console.error("Selection UI Error: ", e); }
