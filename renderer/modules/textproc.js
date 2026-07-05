@@ -263,6 +263,12 @@ export function initTextProc(host) {
     const wysiwygEl = $('#doc-editor-wysiwyg');
     wysiwygEl.addEventListener('mouseup', maybeShowSelectionUI);
     wysiwygEl.addEventListener('dblclick', () => setTimeout(maybeShowSelectionUI, 0));
+    
+    const srcEl = $('#doc-editor-src');
+    if (srcEl) {
+      srcEl.addEventListener('mouseup', maybeShowSelectionUI);
+      srcEl.addEventListener('dblclick', () => setTimeout(maybeShowSelectionUI, 0));
+    }
 
     $$('[data-cmd]').forEach((node) => {
       if (node.classList.contains('tp-dropdown')) return;
@@ -1015,15 +1021,20 @@ export function initTextProc(host) {
     try {
       selPopupRange = range.cloneRange();
       const popups = ensureSelPopup();
-      refreshSelPopupActiveStates();
-      popups.fmt.style.display = 'flex';
+      
+      if (mode === 'wysiwyg') {
+        refreshSelPopupActiveStates();
+        popups.fmt.style.display = 'flex';
+        positionNearRange(popups.fmt, range, 'above');
+      } else {
+        popups.fmt.style.display = 'none';
+      }
+      
       popups.ai.style.display = 'flex';
-      positionNearRange(popups.fmt, range, 'above');
       positionNearRange(popups.ai, range, 'below');
     } catch (e) { console.error("Popup Error: ", e); }
   }
   function maybeShowSelectionUI() {
-    if (mode !== 'wysiwyg') return;
     try {
       const sel = window.getSelection();
       if (sel && !sel.isCollapsed && sel.toString().trim()) {
