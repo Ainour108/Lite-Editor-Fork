@@ -939,9 +939,11 @@ export function initTextProc(host) {
     row.appendChild(send);
     aiWrap.appendChild(row);
 
-    document.getElementById('menu-layer').appendChild(fmtWrap);
-    document.getElementById('menu-layer').appendChild(aiWrap);
-    fmtWrap.hidden = true; aiWrap.hidden = true;
+    const layer = document.getElementById('menu-layer') || document.body;
+    layer.appendChild(fmtWrap);
+    layer.appendChild(aiWrap);
+    fmtWrap.style.display = 'none';
+    aiWrap.style.display = 'none';
     fmtWrap.onmousedown = (e) => e.stopPropagation();
     aiWrap.onmousedown = (e) => e.stopPropagation();
 
@@ -989,23 +991,29 @@ export function initTextProc(host) {
     });
   }
   function hideSelPopup() {
-    if (selPopupFmtEl) selPopupFmtEl.hidden = true;
-    if (selPopupAiEl) selPopupAiEl.hidden = true;
+    if (selPopupFmtEl) selPopupFmtEl.style.display = 'none';
+    if (selPopupAiEl) selPopupAiEl.style.display = 'none';
     selPopupRange = null;
   }
   function showSelectionUI(range) {
-    selPopupRange = range.cloneRange();
-    const popups = ensureSelPopup();
-    refreshSelPopupActiveStates();
-    positionNearRange(popups.fmt, range, 'above');
-    positionNearRange(popups.ai, range, 'below');
+    try {
+      selPopupRange = range.cloneRange();
+      const popups = ensureSelPopup();
+      refreshSelPopupActiveStates();
+      popups.fmt.style.display = 'flex';
+      popups.ai.style.display = 'flex';
+      positionNearRange(popups.fmt, range, 'above');
+      positionNearRange(popups.ai, range, 'below');
+    } catch (e) { console.error("Popup Error: ", e); }
   }
   function maybeShowSelectionUI() {
-    if (mode !== 'wysiwyg') return; // форматирование/AI-попап — только в режиме «Разметка»
-    const sel = window.getSelection();
-    if (sel && !sel.isCollapsed && getActiveEditor().contains(sel.anchorNode) && sel.toString().trim()) {
-      showSelectionUI(sel.getRangeAt(0));
-    }
+    if (mode !== 'wysiwyg') return;
+    try {
+      const sel = window.getSelection();
+      if (sel && !sel.isCollapsed && getActiveEditor().contains(sel.anchorNode) && sel.toString().trim()) {
+        showSelectionUI(sel.getRangeAt(0));
+      }
+    } catch (e) { console.error("Selection UI Error: ", e); }
   }
 
   // ---- Interface for Main ----
