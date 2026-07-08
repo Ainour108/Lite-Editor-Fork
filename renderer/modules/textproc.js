@@ -145,6 +145,9 @@ export function initTextProc(host) {
         id: t.id, absPath: t.absPath || null, name: t.name || 'Безымянный',
         html: t.html || '<p><br></p>', md: t.md || '',
         mode: t.mode === 'markdown' ? 'markdown' : 'wysiwyg', dirty: !!t.dirty,
+        chatLog: Array.isArray(t.chatLog) ? t.chatLog : [],
+        chatAgent: t.chatAgent || 'claude',
+        chatRole: t.chatRole || 'Без роли'
       }));
       nextTabId = openTabs.reduce((m, t) => Math.max(m, t.id), 0) + 1;
       restoredActiveTabId = openTabs.some((t) => t.id === saved.activeTabId) ? saved.activeTabId : openTabs[0].id;
@@ -157,7 +160,11 @@ export function initTextProc(host) {
     persistTabsTimer = setTimeout(() => {
       persist('textproc', {
         activeTabId,
-        tabs: openTabs.map((t) => ({ id: t.id, absPath: t.absPath, name: t.name, html: t.html, md: t.md, mode: t.mode, dirty: t.dirty })),
+        tabs: openTabs.map((t) => ({ 
+          id: t.id, absPath: t.absPath, name: t.name, 
+          html: t.html, md: t.md, mode: t.mode, dirty: t.dirty,
+          chatLog: t.chatLog, chatAgent: t.chatAgent, chatRole: t.chatRole
+        })),
       });
     }, 600);
   }
@@ -699,17 +706,17 @@ export function initTextProc(host) {
       const w = el('div', 'tp-msg ' + m.role);
       const b = el('div', 'tp-bubble');
       b.textContent = m.busy ? (m.text + ' ⏳') : m.text;
-      if (m.role === 'agent' && !m.busy) {
+      if (m.role === 'agent' && !m.busy && m.isReplacement) {
         const acts = el('div', 'tp-bubble-actions');
-        const replaceBtn = el('button', 'tp-bubble-replace', 'Заменить');
-        replaceBtn.type = 'button';
-        replaceBtn.onclick = () => {
-          if (mode === 'markdown') { $('#doc-editor-md').focus(); document.execCommand('insertText', false, m.text); }
-          else { $('#doc-editor-wysiwyg').focus(); document.execCommand('insertHTML', false, mdToHtml(m.text)); }
+        const undoBtn = host.iconBtn('tp-bubble-undo', 'undo', 'Отменить автозамену (Cmd+Z)');
+        undoBtn.onclick = () => {
+          if (mode === 'markdown') { $('#doc-editor-md').focus(); }
+          else { $('#doc-editor-wysiwyg').focus(); }
+          document.execCommand('undo');
           markDirty();
-          updateStatus('Текст заменён');
+          updateStatus('Автозамена отменена');
         };
-        acts.appendChild(replaceBtn);
+        acts.appendChild(undoBtn);
         b.appendChild(acts);
       }
       w.appendChild(b);
@@ -726,14 +733,23 @@ export function initTextProc(host) {
       } catch (e) {
         parts.push(`Действуй в роли: ${chatRole}`);
       }
-    }
-    parts.push(instruction);
-    if (sel.whole) {
-      parts.push('Ниже — весь документ (Markdown), разбитый на пронумерованные абзацы вида "[N] текст". Эти номера соответствуют номерам, которые пользователь видит рядом с абзацами в редакторе — используй их только чтобы понять, о каком абзаце идёт речь (например «исправь абзац 5» = блок [5]). Верни ТОЛЬКО итоговый текст для замены: без пояснений, без приветствий, без самих меток [N].');
-      parts.push('===ФРАГМЕНТ===\n' + numberedMarkdownForAI(sel.text) + '\n===КОНЕЦ===');
+      parts.push(instruction);
+      if (sel.whole) {
+        parts.push('Ниже — весь документ (Markdown), разбитый на пронумерованные абзацы вида "[N] текст". Эти номера соответствуют номерам, которые пользователь видит рядом с абзацами в редакторе — используй их только чтобы понять, о каком абзаце идёт речь (например «исправь абзац 5» = блок [5]). Верни ТОЛЬКО итоговый текст для замены: без пояснений, без приветствий, без самих меток [N].');
+        parts.push('===ФРАГМЕНТ===\n' + numberedMarkdownForAI(sel.text) + '\n===КОНЕЦ===');
+      } else {
+        parts.push('Ниже — фрагмент текста. Верни ТОЛЬКО итоговый текст для замены: без пояснений, без приветствий.');
+        parts.push('===ФРАГМЕНТ===\n' + sel.text + '\n===КОНЕЦ===');
+      }
     } else {
-      parts.push('Ниже — фрагмент текста. Верни ТОЛЬКО итоговый текст для замены: без пояснений, без приветствий.');
-      parts.push('===ФРАГМЕНТ===\n' + sel.text + '\n===КОНЕЦ===');
+      parts.push(instruction);
+      if (sel.whole) {
+        parts.push('Текущий текст документа (для контекста):');
+        parts.push('===ДОКУМЕНТ===\n' + sel.text + '\n===КОНЕЦ===');
+      } else {
+        parts.push('Текущий выделенный фрагмент текста (для контекста):');
+        parts.push('===ФРАГМЕНТ===\n' + sel.text + '\n===КОНЕЦ===');
+      }
     }
     return parts.join('\n\n');
   }
@@ -742,17 +758,68 @@ export function initTextProc(host) {
     const instruction = ta.value.trim();
     if (!instruction) return;
     const sel = selForChat();
+    
+    // Сохраняем точный Range выделения для автозамены, если выделен фрагмент
+    let targetRange = null;
+    const sysSel = window.getSelection();
+    if (!sel.whole && sysSel && sysSel.rangeCount > 0) {
+      targetRange = sysSel.getRangeAt(0).cloneRange();
+    }
+    
     ta.value = '';
     chatLog.push({ role: 'user', text: instruction });
-    const am = { role: 'agent', text: '', busy: true, reqId: 'tpq' + (++aiSeq) };
+    const isReplacement = chatRole !== 'Без роли';
+    const am = { role: 'agent', text: '', busy: true, reqId: 'tpq' + (++aiSeq), isReplacement };
     chatLog.push(am);
     renderChatLog();
     const offData = lite.tp.onData(({ reqId: r, chunk }) => { if (r !== am.reqId) return; am.text += chunk; renderChatLog(); });
-    const offDone = lite.tp.onDone(({ reqId: r, text }) => { if (r !== am.reqId) return; am.busy = false; am.text = text || ''; cleanup(); renderChatLog(); });
+    const offDone = lite.tp.onDone(({ reqId: r, text }) => { 
+      if (r !== am.reqId) return; 
+      am.busy = false; 
+      
+      if (chatAgent === 'antigravity') {
+        am.text = "Окно Antigravity открыто. ИИ редактирует файл. Как только изменения сохранятся, они мгновенно появятся здесь.";
+        cleanup(); renderChatLog();
+        return; // Gemini правит файл на диске, мы дождемся onFsChange
+      }
+      
+      am.text = text || ''; 
+      cleanup(); renderChatLog(); 
+      
+      // Автозамена текста
+      if (isReplacement) {
+        if (targetRange && am.text) {
+          const s = window.getSelection();
+          s.removeAllRanges();
+          s.addRange(targetRange);
+          if (mode === 'markdown') { $('#doc-editor-md').focus(); document.execCommand('insertText', false, am.text); }
+          else { $('#doc-editor-wysiwyg').focus(); document.execCommand('insertHTML', false, mdToHtml(am.text)); }
+          markDirty();
+          updateStatus('Текст изменён AI');
+        } else if (sel.whole && am.text) {
+          if (mode === 'markdown') { 
+            $('#doc-editor-md').focus(); 
+            document.execCommand('selectAll', false, null);
+            document.execCommand('insertText', false, am.text); 
+          } else { 
+            $('#doc-editor-wysiwyg').focus(); 
+            document.execCommand('selectAll', false, null);
+            document.execCommand('insertHTML', false, mdToHtml(am.text)); 
+          }
+          markDirty();
+          updateStatus('Документ изменён AI');
+        }
+      }
+    });
     const offErr = lite.tp.onError(({ reqId: r, error }) => { if (r !== am.reqId) return; am.busy = false; am.text = 'Ошибка: ' + String(error); cleanup(); renderChatLog(); });
     const cleanup = () => { try { offData(); offDone(); offErr(); } catch (_) {} };
     
     const prompt = await composePrompt(sel, instruction);
+    
+    if (chatAgent === 'antigravity' && currentFile && dirty) {
+      await saveFile(); // Сохраняем локальные правки перед вызовом внешнего редактора
+    }
+    
     lite.tp.run({ reqId: am.reqId, agent: chatAgent, prompt });
   }
   function renderModels() {
@@ -900,63 +967,55 @@ export function initTextProc(host) {
         ctxText.classList.remove('filled'); 
       }
     }
-    if (!hasSel) hideSelPopup();
+    if (!hasSel) {
+      if (selPopupEl && selPopupEl.style.display !== 'none' && selPopupEl.contains(document.activeElement)) return;
+      hideSelPopup();
+    }
+  });
+
+  document.addEventListener('mousedown', (e) => {
+    if (selPopupEl && selPopupEl.style.display !== 'none') {
+      if (!selPopupEl.contains(e.target)) {
+        hideSelPopup();
+      }
+    }
   });
 
   // ---- Плавающий попап при выделении: панель форматирования + мини-вопрос к AI ----
-  // Переиспользует execCmd()/sendChat()/selForChat() как есть — только показывает/позиционирует
-  // готовый UI поверх существующего pipeline, ничего в нём не дублирует.
-  let selPopupFmtEl = null;
-  let selPopupAiEl = null;
+  let selPopupEl = null;
   let selPopupRange = null; // сохранённый Range — фокус на инпуте попапа может сбить window.getSelection()
 
-  // Реплика паттерна placeMenu() из renderer.js (другой bundle, недоступен отсюда напрямую):
-  // append → задать left/top от диапазона выделения → getBoundingClientRect() → clamp по вьюпорту.
-  function positionNearRange(node, range, side) {
-    node.hidden = false;
+  // Позиционируем элемент относительно selection (range) с учетом границ экрана
+  function positionNearRange(node, range, side = 'above') {
     const r = range.getBoundingClientRect();
+    node.style.display = 'flex';
     const nr = node.getBoundingClientRect();
-    let x = r.left + r.width / 2 - nr.width / 2;
+    let x = r.left + (r.width / 2) - (nr.width / 2);
     let y = side === 'below' ? r.bottom + 8 : r.top - nr.height - 8;
     x = Math.max(8, Math.min(x, window.innerWidth - nr.width - 8));
     y = Math.max(8, Math.min(y, window.innerHeight - nr.height - 8));
     node.style.left = x + 'px';
     node.style.top = y + 'px';
   }
-  function ensureSelPopup() {
-    let fmtWrap = selPopupFmtEl;
-    let aiWrap = selPopupAiEl;
 
-    if (!fmtWrap) {
-      fmtWrap = el('div', 'tp-sel-popup tp-sel-popup-fmt-wrap');
+  function ensureSelPopup() {
+    if (!selPopupEl) {
+      selPopupEl = el('div', 'tp-sel-popup');
+      
       const fmtRow = el('div', 'tp-sel-popup-fmt');
       [['bold', 'Жирный'], ['italic', 'Курсив'], ['underline', 'Подчёркнутый']].forEach(([cmd, title]) => {
-        const btn = host.iconBtn('tp-pill-btn', cmd, title);
+        const btn = host.iconBtn('tp-pill-btn', cmd, '');
         btn.dataset.cmd = cmd;
         fmtRow.appendChild(btn);
       });
       fmtRow.appendChild(el('span', 'tp-pill-sep'));
-      const listBtn = host.iconBtn('tp-pill-btn', 'list', 'Список');
+      const listBtn = host.iconBtn('tp-pill-btn', 'list', '');
       listBtn.dataset.cmd = 'insertUnorderedList';
       fmtRow.appendChild(listBtn);
-      fmtWrap.appendChild(fmtRow);
+      
+      selPopupEl.appendChild(fmtRow);
 
-      aiWrap = el('div', 'tp-sel-popup tp-sel-popup-ai-wrap');
-      const row = el('div', 'tp-sel-popup-row');
-      row.appendChild(el('span', 'tp-sel-popup-arrow', '↳'));
-      const input = document.createElement('input');
-      input.type = 'text'; input.className = 'tp-sel-popup-input'; input.placeholder = 'Задать вопрос по теме…';
-      row.appendChild(input);
-      const send = host.iconBtn('tp-sel-popup-send', 'send', 'Отправить');
-      row.appendChild(send);
-      aiWrap.appendChild(row);
-
-      fmtWrap.style.display = 'none';
-      aiWrap.style.display = 'none';
-      fmtWrap.onmousedown = (e) => e.stopPropagation();
-      aiWrap.onmousedown = (e) => e.stopPropagation();
-
-      fmtWrap.querySelectorAll('[data-cmd]').forEach((btn) => {
+      fmtRow.querySelectorAll('[data-cmd]').forEach((btn) => {
         btn.onmousedown = (e) => e.preventDefault();
         btn.onclick = (e) => {
           e.preventDefault();
@@ -965,39 +1024,82 @@ export function initTextProc(host) {
           refreshSelPopupActiveStates();
         };
       });
+
+      const aiRow = el('div', 'tp-sel-popup-row');
+      aiRow.appendChild(el('span', 'tp-sel-popup-arrow', '↳'));
+      const input = document.createElement('input');
+      input.type = 'text'; input.className = 'tp-sel-popup-input'; input.placeholder = 'Задать вопрос по теме…';
+      
+      const clearBtn = host.iconBtn('tp-sel-popup-clear', 'close', 'Очистить');
+      clearBtn.style.display = 'none';
+      clearBtn.onclick = (e) => {
+        e.preventDefault(); e.stopPropagation();
+        input.value = '';
+        clearBtn.style.display = 'none';
+        input.focus();
+      };
+      input.addEventListener('input', () => {
+        clearBtn.style.display = input.value.trim() ? 'flex' : 'none';
+      });
+
+      aiRow.appendChild(input);
+      aiRow.appendChild(clearBtn);
+      
+      const send = host.iconBtn('tp-sel-popup-send', 'send', 'В панель AI');
+      aiRow.appendChild(send);
+      
+      selPopupEl.appendChild(aiRow);
+
+      selPopupEl.style.display = 'none';
+      selPopupEl.onmousedown = (e) => e.stopPropagation();
+
       const submit = () => {
         const q = input.value.trim();
-        if (!q) return;
         restoreSelPopupRange();
-        $('#doc-ai-chat-input').value = q;
-        input.value = '';
-        hideSelPopup();
-        $('#doc-inspector').classList.remove('collapsed');
-        setTab('ai');
-        sendChat();
+        
+        const aiInput = $('#doc-ai-chat-input');
+        const selText = window.getSelection().toString().trim();
+        
+        if (aiInput) {
+          if (q) {
+            aiInput.value = q;
+            input.value = '';
+            clearBtn.style.display = 'none';
+            hideSelPopup();
+            $('#doc-inspector').classList.remove('collapsed');
+            setTab('ai');
+            sendChat();
+          } else if (selText) {
+            const current = aiInput.value.trim();
+            aiInput.value = current ? current + '\n\n' + `"${selText}"` : `"${selText}"`;
+            input.value = '';
+            clearBtn.style.display = 'none';
+            hideSelPopup();
+            $('#doc-inspector').classList.remove('collapsed');
+            setTab('ai');
+            setTimeout(() => {
+              if (aiInput) {
+                aiInput.focus();
+                aiInput.selectionStart = aiInput.selectionEnd = aiInput.value.length;
+              }
+            }, 50);
+          }
+        }
       };
       send.onclick = submit;
       input.onkeydown = (e) => {
         if (e.key === 'Enter') { e.preventDefault(); submit(); }
         if (e.key === 'Escape') hideSelPopup();
       };
-      
-      selPopupFmtEl = fmtWrap;
-      selPopupAiEl = aiWrap;
     }
 
     const layer = document.body;
-    if (fmtWrap.parentNode !== layer) {
-      layer.appendChild(fmtWrap);
-      fmtWrap.style.zIndex = '99999';
+    if (selPopupEl.parentNode !== layer) {
+      layer.appendChild(selPopupEl);
+      selPopupEl.style.zIndex = '99999';
     }
-    if (aiWrap.parentNode !== layer) {
-      layer.appendChild(aiWrap);
-      aiWrap.style.zIndex = '99999';
-    }
-
-    return { fmt: fmtWrap, ai: aiWrap };
   }
+
   function restoreSelPopupRange() {
     if (!selPopupRange) return;
     const sel = window.getSelection();
@@ -1005,33 +1107,31 @@ export function initTextProc(host) {
     sel.addRange(selPopupRange);
   }
   function refreshSelPopupActiveStates() {
-    if (!selPopupFmtEl) return;
-    selPopupFmtEl.querySelectorAll('[data-cmd]').forEach((btn) => {
+    if (!selPopupEl) return;
+    selPopupEl.querySelectorAll('[data-cmd]').forEach((btn) => {
       let active = false;
       try { active = document.queryCommandState(btn.dataset.cmd); } catch (_) {}
       btn.classList.toggle('on', active);
     });
   }
   function hideSelPopup() {
-    if (selPopupFmtEl) selPopupFmtEl.style.display = 'none';
-    if (selPopupAiEl) selPopupAiEl.style.display = 'none';
+    if (selPopupEl) selPopupEl.style.display = 'none';
     selPopupRange = null;
   }
   function showSelectionUI(range) {
     try {
       selPopupRange = range.cloneRange();
-      const popups = ensureSelPopup();
+      ensureSelPopup();
       
+      const fmtRow = selPopupEl.querySelector('.tp-sel-popup-fmt');
       if (mode === 'wysiwyg') {
         refreshSelPopupActiveStates();
-        popups.fmt.style.display = 'flex';
-        positionNearRange(popups.fmt, range, 'above');
+        fmtRow.style.display = 'flex';
       } else {
-        popups.fmt.style.display = 'none';
+        fmtRow.style.display = 'none';
       }
       
-      popups.ai.style.display = 'flex';
-      positionNearRange(popups.ai, range, 'below');
+      positionNearRange(selPopupEl, range, 'above');
     } catch (e) { console.error("Popup Error: ", e); }
   }
   function maybeShowSelectionUI() {
@@ -1465,7 +1565,10 @@ export function initTextProc(host) {
       html: htmlText,
       md: mdText,
       mode: 'wysiwyg',
-      dirty: false
+      dirty: false,
+      chatLog: [],
+      chatAgent: 'claude',
+      chatRole: 'Без роли'
     };
     
     openTabs.push(tab);
@@ -1511,7 +1614,10 @@ export function initTextProc(host) {
       html: '<p><br></p>',
       md: '',
       mode: 'wysiwyg',
-      dirty: false
+      dirty: false,
+      chatLog: [],
+      chatAgent: 'claude',
+      chatRole: 'Без роли'
     };
     openTabs.push(tab);
     renderTabsUI();
@@ -1526,6 +1632,9 @@ export function initTextProc(host) {
       tab.dirty = dirty;
       tab.html = $('#doc-editor-wysiwyg').innerHTML;
       tab.md = $('#doc-editor-md').textContent;
+      tab.chatLog = [...chatLog];
+      tab.chatAgent = chatAgent;
+      tab.chatRole = chatRole;
     }
   }
 
@@ -1541,6 +1650,10 @@ export function initTextProc(host) {
     currentName = tab.name;
     mode = tab.mode;
     dirty = tab.dirty;
+    
+    chatLog = Array.isArray(tab.chatLog) ? [...tab.chatLog] : [];
+    chatAgent = tab.chatAgent || 'claude';
+    chatRole = tab.chatRole || 'Без роли';
 
     // Load content without resetting mode
     $('#doc-editor-wysiwyg').innerHTML = tab.html;
@@ -1549,6 +1662,9 @@ export function initTextProc(host) {
     updateStatus(dirty ? 'Изменено' : (tab.absPath ? 'Открыт' : 'Новый файл'));
 
     renderTabsUI();
+    renderChatLog();
+    renderModels();
+    renderRoles();
   }
 
   async function closeTab(id) {
@@ -1575,9 +1691,34 @@ export function initTextProc(host) {
     }
   }
 
-  function onFsChange(proj, files) {
+  async function onFsChange(proj, files) {
     if (getActiveProj() && getActiveProj().path === proj.path) {
       renderTree(proj);
+      
+      // Автоматически подтягиваем внешние изменения файла (например, от Gemini), если нет локальных правок
+      if (currentFile && !dirty) {
+        try {
+          const r = await lite.fs.readFile(currentFile);
+          if (r && !r.error && r.content !== currentMarkdown()) {
+            const canvasEl = document.querySelector('.tp-canvas') || document.querySelector('.tp-doc-editor-wrap');
+            const st = canvasEl ? canvasEl.scrollTop : 0;
+            
+            if (mode === 'markdown') { 
+              $('#doc-editor-md').focus(); 
+              document.execCommand('selectAll', false, null);
+              document.execCommand('insertText', false, r.content); 
+            } else { 
+              $('#doc-editor-wysiwyg').focus(); 
+              document.execCommand('selectAll', false, null);
+              document.execCommand('insertHTML', false, mdToHtml(r.content)); 
+            }
+            
+            if (canvasEl) canvasEl.scrollTop = st;
+            updateStatus('Синхронизировано с диском (Gemini)');
+            setTimeout(() => { dirty = false; renderTabsUI(); }, 10);
+          }
+        } catch (e) {}
+      }
     }
   }
 

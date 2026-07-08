@@ -703,34 +703,31 @@ ipcMain.on('tp:run', (e, { reqId, agent, prompt } = {}) => {
   const conf = TP_AGENTS[agent] || TP_AGENTS.claude;
   const args = conf.via === 'arg' ? [...conf.args, prompt || ''] : [...conf.args];
   let child;
-  try { child = pty.spawn(conf.cmd, args, { cwd: os.homedir(), env: tpEnv(), cols: 80, rows: 24 }); }
+  try { child = spawn(conf.cmd, args, { cwd: os.homedir(), env: tpEnv() }); }
   catch (err) { safeSend(sender, 'tp:error', { reqId, error: 'не запустить «' + conf.cmd + '»: ' + (err.message || err) }); return; }
   tpReqs.set(reqId, child);
   let out = '';
+  let errOut = '';
   const to = setTimeout(() => { if (tpReqs.has(reqId)) { tpReqs.delete(reqId); try { child.kill(); } catch (_) {} safeSend(sender, 'tp:error', { reqId, error: 'таймаут (агент не ответил вовремя)' }); } }, 240000);
-  child.onData((c) => { 
-    const chunk = c.replace(/\x1b\[[0-9;]*m/g, ''); // strip ansi
+  
+  child.stdout.on('data', (c) => { 
+    const chunk = c.toString('utf8');
     out += chunk; 
     safeSend(sender, 'tp:data', { reqId, chunk }); 
   });
-  child.onExit(({ exitCode }) => {
+  child.stderr.on('data', (c) => { errOut += c.toString('utf8'); });
+  child.on('error', (err) => { 
+    if (!tpReqs.has(reqId)) return; tpReqs.delete(reqId); clearTimeout(to); 
+    safeSend(sender, 'tp:error', { reqId, error: 'ошибка запуска: ' + (err.message || err) }); 
+  });
+  child.on('close', (exitCode) => {
     if (!tpReqs.has(reqId)) return; tpReqs.delete(reqId); clearTimeout(to);
     
-    // Attempt to strip echoed prompt if via stdin
     let text = out.trim();
-    if (conf.via === 'stdin' && prompt) {
-      const promptLines = prompt.split('\n');
-      const firstLine = promptLines[0].trim();
-      if (firstLine && text.includes(firstLine)) {
-         const idx = text.indexOf('\x04');
-         if (idx !== -1) text = text.substring(idx + 1).trim();
-      }
-    }
-    
     if (text) safeSend(sender, 'tp:done', { reqId, text }); 
-    else safeSend(sender, 'tp:error', { reqId, error: 'агент завершился с кодом ' + exitCode });
+    else safeSend(sender, 'tp:error', { reqId, error: errOut.trim() || ('агент завершился с кодом ' + exitCode) });
   });
-  if (conf.via === 'stdin') { try { child.write((prompt || '') + '\r\n\x04'); } catch (_) {} }
+  if (conf.via === 'stdin') { try { child.stdin.write(prompt || ''); child.stdin.end(); } catch (_) {} }
 });
 ipcMain.on('tp:abort', (_e, { reqId } = {}) => {
   const c = tpReqs.get(reqId);

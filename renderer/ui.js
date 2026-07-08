@@ -134,7 +134,7 @@ export const ICONS = {
   undo: '<path d="M9 7L4 12l5 5"/><path d="M4 12h11a5 5 0 0 1 0 10h-3"/>',
   redo: '<path d="M15 7l5 5-5 5"/><path d="M20 12H9a5 5 0 0 0 0 10h3"/>',
   panels: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>',
-  send: '<path d="M3 3l18 9-18 9 4-9-4-9z" fill="currentColor" stroke="none"/>',
+  send: '<path d="M3 20.5l18-8.5L3 3.5 3 10l12 2-12 2z" fill="currentColor"/>',
   formula: '<path d="M6 4h9M6 4l3.5 8L6 20h9M14 9l4 4M18 9l-4 4"/>',
   'drag-handle': '<circle cx="9" cy="5" r="1.5" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1.5" fill="currentColor" stroke="none"/><circle cx="9" cy="19" r="1.5" fill="currentColor" stroke="none"/><circle cx="15" cy="5" r="1.5" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1.5" fill="currentColor" stroke="none"/><circle cx="15" cy="19" r="1.5" fill="currentColor" stroke="none"/>',
   'align-justify': '<path d="M4 6h16M4 12h16M4 18h16"/>',
@@ -144,12 +144,15 @@ export const ICONS = {
   'zoom-out': '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M8 11h6"/>',
   'list-ol': '<path d="M10 6h10M10 12h10M10 18h10"/><path d="M4 6h1v4M4 10h2M4 14h2l-2 2h2M4 18v-2l2 2"/>',
   'check-square': '<rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 12l2.5 2.5L16 9"/>',
+  'text-color': '<path d="M5 20h14M9 16L12 4l3 12M10 12h4"/>',
+  'highlighter': '<path d="M14 4l6 6-7 7-6-6 7-7zM7 11l-3 3v3h3l3-3M4 21h16"/>',
   square: '<rect x="3" y="3" width="18" height="18" rx="3"/>',
   'obs-new-file': '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>',
   'obs-new-folder': '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><path d="M12 11v6"/><path d="M9 14h6"/>',
   'obs-sort': '<path d="M6 3v18"/><path d="M3 6l3-3 3 3"/><path d="M12 6h8"/><path d="M12 12h6"/><path d="M12 18h4"/>',
   'obs-collapse': '<rect x="5" y="8" width="14" height="8" rx="1.5"/><path d="M5 4h14M5 20h14"/>',
   hash: '<path d="M5 9h14M5 15h14M10 4L7 20M17 4l-3 16"/>',
+  close: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
 };
 export function icon(name, size = 16) {
   return svgEl(`<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`);
